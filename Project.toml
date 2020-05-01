@@ -1,4 +1,4 @@
-name = "MGPipsSolver"
+name = "PipsSolver"
 uuid = "0e2b999c-8a3a-11ea-3c4b-c36350f324a0"
 authors = ["Jordan Jalving", "University of Wisconsin-Madison"]
 version = "0.1.0"
