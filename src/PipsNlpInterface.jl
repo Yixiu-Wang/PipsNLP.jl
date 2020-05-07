@@ -91,7 +91,8 @@ function pipsnlp_solve(graph::ModelGraph) #Assume graph variables and constraint
 
     scen = length(submodels)
     #############################
-    master = getmodel(getmasternode(graph))
+    #master = getmodel(getmasternode(graph))
+    master = JuMP.Model()
     modelList = [master; submodels]
 
     #Add PIPSNLPData to each model
