@@ -2,12 +2,12 @@ using Plasmo
 using Ipopt
 
 graph = ModelGraph()
-optimizer = with_optimizer(Ipopt.Optimizer)
+optimizer = Ipopt.Optimizer
 
-n1 = add_node!(graph)
-n2 = add_node!(graph)
-n3 = add_node!(graph)
-n4 = add_node!(graph)
+@node(graph,n1)
+@node(graph,n2)
+@node(graph,n3)
+@node(graph,n4)
 
 @variable(n1,0 <= x <= 10, start = 1)
 @variable(n1,0 <= y <= 3 , start = 1)
@@ -36,14 +36,3 @@ n4 = add_node!(graph)
 @linkconstraint(graph, n1[:x] + n2[:x] + n3[:x][1] <= n4[:x][2])
 @linkconstraint(graph, n3[:x][1] == n4[:x][1])
 @linkconstraint(graph, n2[:x] >= n1[:x])  #I this causes issues because of how I treat upper and lower bounds
-
-# @linkconstraint(graph, sum(n4[:x][i] for i = 1:3) <= sum(n3[:x][i] for i = 1:2))
-
-#@graphobjective(graph,Min,n1[:y] + n2[:x])
-
-# optimize!(graph,optimizer)
-#
-# println("n1[:x]= ",nodevalue(n1[:x]))
-# println("n1[:y]= ",nodevalue(n1[:y]))
-# println("n2[:x]= ",nodevalue(n2[:x]))
-# println("objective = ", objective_value(graph))

@@ -1,6 +1,5 @@
 # to import MPIManager
 using MPIClusterManagers
-
 # need to also import Distributed to use addprocs()
 using Distributed
 
@@ -14,11 +13,13 @@ if !(isdefined(Main,:manager))
     addprocs(manager)
 end
 
-#Setup the worker environments
-@everywhere using Pkg
-@everywhere Pkg.activate(".")
-@everywhere using ModelGraphs
-@everywhere using ModelGraphMPISolvers
+@everywhere begin
+    using Pkg
+    using Revise
+    Pkg.activate((@__DIR__)*"/..")
+    using Plasmo
+    using PipsSolver
+end
 
 #Distribute the modelgraph to the Julia workers
 julia_workers = collect(values(manager.mpi2j))
@@ -30,7 +31,7 @@ r2 = remote_graphs[2] #reference to the model graph on worker 2
 #Solve with PIPS-NLP
 @mpi_do manager begin
     using MPI
-    pipsnlp_solve(getfield(Main,:pipsgraph))  #this works because the vairable :pipsgraph was defined on each worker (mpirank)
+    pipsnlp_solve(pipsgraph)  #this works because the vairable :pipsgraph was defined on each worker (mpirank)
 end
 
 println("Fetching solution")

@@ -15,10 +15,13 @@ if !(isdefined(Main,:manager))
 end
 
 #Setup the worker environments
-@everywhere using Pkg
-@everywhere Pkg.activate(".")
-@everywhere using ModelGraphs
-@everywhere using ModelGraphMPISolvers
+@everywhere begin
+    using Pkg
+    using Revise
+    Pkg.activate((@__DIR__)*"/..")
+    using Plasmo
+    using PipsSolver
+end
 
 #Distribute the modelgraph to the Julia workers
 julia_workers = collect(values(manager.mpi2j))
@@ -38,9 +41,7 @@ println("Fetching solution")
 rank_zero = manager.mpi2j[0] #get the julia process representing rank 0
 solution = fetch(@spawnat(rank_zero, getfield(Main, :pipsgraph))) #transfer the solution from rank 0 to our local Julia process
 
-for node in getnodes(solution)
-    println(node.model.ext[:colVal])
-end
+
 
 # Check with julia master:
 # using MPI

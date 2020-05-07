@@ -2,7 +2,7 @@ using Pkg
 Pkg.activate("../")
 
 using JuMP
-using ModelGraphs
+using Plasmo
 using MPI
 using ModelGraphMPISolvers
 
@@ -72,7 +72,7 @@ end
 pipsnlp_solve(graph)
 
 # if rank == 0
-#     @show getobjectivevalue(graph)
+#     @show objective_value(graph)
 # end
 
 
