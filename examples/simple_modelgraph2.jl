@@ -1,4 +1,4 @@
-using ModelGraphs
+using Plasmo
 using Ipopt
 
 graph = ModelGraph()

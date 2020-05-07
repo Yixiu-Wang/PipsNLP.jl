@@ -1,6 +1,10 @@
-using Plasmo
+using Pkg
+Pkg.activate("../")
+
+using JuMP
+using ModelGraphs
 using MPI
-using PipsSolver
+using ModelGraphMPISolvers
 
 MPI.Init()
 

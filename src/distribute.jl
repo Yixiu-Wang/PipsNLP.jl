@@ -7,7 +7,6 @@ function distribute(mg::ModelGraph,to_workers::Vector{Int64};remote_name = :grap
     #IDEA: Create a channel from the master process to each worker?
     channel_nodes = RemoteChannel(1)    #we will allocate and send nodes to workers
     channel_indices = RemoteChannel(1)
-    channel_master = RemoteChannel(1)   #we will send the master problem to each worker
 
     n_nodes = getnumnodes(mg)
     n_workers = length(to_workers)
@@ -15,13 +14,31 @@ function distribute(mg::ModelGraph,to_workers::Vector{Int64};remote_name = :grap
     nodes = all_nodes(mg)
     node_indices = [getindex(mg,node) for node in nodes]
 
-    #link_data = ModelGraphs.get_link_constraint_data(mg)
-    n_linkeq_cons = length(mg.linkeqconstraints)
-    n_linkineq_cons = length(mg.linkineqconstraints)
+
+    # linkeqconstraints = []
+    # linkineqconstraints = []
+    # for edge in getedges(mg)
+    #     append!(linkeqconstraints,edge.linkeqconstraints)
+    #     append!(linkineqconstraints,edge.linkineqconstraints)
+    # end
+    linkeqconstraints = Dict()
+    linkineqconstraints = Dict()
+    for edge in getedges(mg)
+        for (idx,link) in edge.linkeqconstraints
+            linkeqconstraints[idx] = link
+        end
+        for (idx,link) in edge.linkineqconstraints
+            linkineqconstraints[idx] = link
+        end
+    end
+
+    n_linkeq_cons =  length(linkeqconstraints)  #length(mg.linkeqconstraints)
+    n_linkineq_cons = length(linkineqconstraints) #length(mg.linkineqconstraints)
 
     ineqlink_lb = zeros(n_linkineq_cons)
     ineqlink_ub = zeros(n_linkineq_cons)
-    for (idx,link) in mg.linkineqconstraints
+
+    for (idx,link) in linkineqconstraints #mg.linkineqconstraints
         if isa(link.set,MOI.LessThan)
             ineqlink_lb[idx] = -Inf
             ineqlink_ub[idx] = link.set.upper
@@ -48,37 +65,33 @@ function distribute(mg::ModelGraph,to_workers::Vector{Int64};remote_name = :grap
         end
         j += nodes_per_worker
     end
-    master = getmasternode(mg)
-    put!(channel_master, [master])  #put master model (node) into channel
 
     println("Distributing graph among workers: $to_workers")
     remote_references = []
     #Fill channel with sets of nodes to send
-    #TODO: Make this parallel
+    #TODO: Make this run in parallel
     @sync begin
         for (i,worker) in enumerate(to_workers)
             @spawnat(1, put!(channel_nodes, allocations[i]))
             @spawnat(1, put!(channel_indices, node_indices[i]))
             ref1 = @spawnat worker begin
-                Core.eval(Main, Expr(:(=), :master, fetch(channel_master)[1]))
                 Core.eval(Main, Expr(:(=), :nodes, take!(channel_nodes)))
                 Core.eval(Main, Expr(:(=), :node_indices, take!(channel_indices)))
             end
             wait(ref1)
-            ref2 = @spawnat worker Core.eval(Main, Expr(:(=), remote_name, ModelGraphs._create_worker_modelgraph(getfield(Main,:master),getfield(Main,:nodes),getfield(Main,:node_indices),
+            ref2 = @spawnat worker Core.eval(Main, Expr(:(=), remote_name, PipsSolver._create_worker_modelgraph(getfield(Main,:nodes),getfield(Main,:node_indices),
             n_nodes,n_linkeq_cons,n_linkineq_cons,ineqlink_lb,ineqlink_ub)))
             push!(remote_references,ref2)
         end
-        return remote_references
+        #return remote_references
     end
+    return remote_references
 end
 
-function _create_worker_modelgraph(master::ModelNode,modelnodes::Vector{ModelNode},node_indices::Vector{Int64},n_nodes::Int64,n_linkeq_cons::Int64,n_linkineq_cons::Int64,
+function _create_worker_modelgraph(modelnodes::Vector{ModelNode},node_indices::Vector{Int64},n_nodes::Int64,n_linkeq_cons::Int64,n_linkineq_cons::Int64,
     link_ineq_lower::Vector,link_ineq_upper::Vector)
     graph = ModelGraph()
     graph.node_idx_map = Dict{ModelNode,Int64}()
-    graph.masternode = master
-    graph.node_idx_map[master] = 0
 
     #Add nodes to worker's graph.  Each worker should have the same number of nodes, but some will be empty.
     for i = 1:n_nodes
@@ -90,13 +103,39 @@ function _create_worker_modelgraph(master::ModelNode,modelnodes::Vector{ModelNod
         index = node_indices[i]  #need node index in highest level
         new_node = getnode(graph,index)
         set_model(new_node,getmodel(node))
-        new_node.partial_linkeqconstraints = node.partial_linkeqconstraints
-        new_node.partial_linkineqconstraints = node.partial_linkineqconstraints
+
+        #setup new node partial constraints
+        # new_node.partial_linkeqconstraints = node.partial_linkeqconstraints
+        # new_node.partial_linkineqconstraints = node.partial_linkineqconstraints
     end
-    #We need the graph to have the partial constraints over graph nodes
-    #graph.linkconstraints = _add_link_terms(modelnodes)
-    graph.linkeqconstraints = _add_linkeq_terms(modelnodes)
-    graph.linkineqconstraints = _add_linkineq_terms(modelnodes)
+    # We need the graph to have the partial constraints over graph nodes
+    # Add link constraints
+    # graph.linkeqconstraints = _add_linkeq_terms(modelnodes)
+    # graph.linkineqconstraints = _add_linkineq_terms(modelnodes)
+
+    #Setup new graph linkconstraints
+    linkeqconstraints = _add_linkeq_terms(modelnodes)
+    linkineqconstraints = _add_linkineq_terms(modelnodes)
+
+    for (idx,link) in linkeqconstraints
+        cref = Plasmo.add_link_equality_constraint(graph,JuMP.ScalarConstraint(link.func,link.set))
+        #need to change the constraint index to mathc the original linkconstraint
+        linkedge = cref.linkedge
+        old_idx = cref.idx
+        linkedge.linkeqconstraints[idx] = linkedge.linkeqconstraints[old_idx]
+        if old_idx != idx
+            delete!(linkedge.linkeqconstraints,old_idx)
+        end
+    end
+    for link in linkineqconstraints
+        cref = Plasmo.add_link_inequality_constraint(JuMP.ScalarConstraint(link.func,link.set))
+        linkedge = cref.linkedge
+        old_idx = cref.idx
+        linkedge.linkeqconstraints[idx] = linkedge.linkeqconstraints[old_idx]
+        if old_idx != idx
+            delete!(linkedge.linkeqconstraints,old_idx)
+        end
+    end
 
     #Tell the worker how many linkconstraints the graph actually has
     graph.obj_dict[:n_linkeq_cons] = n_linkeq_cons
@@ -107,7 +146,7 @@ function _create_worker_modelgraph(master::ModelNode,modelnodes::Vector{ModelNod
 end
 
 function _add_linkeq_terms(modelnodes::Vector{ModelNode})
-    linkeqconstraints = OrderedDict()
+    linkeqconstraints = Plasmo.DataStructures.OrderedDict()
     for node in modelnodes
         partial_links = node.partial_linkeqconstraints
         for (idx,linkconstraint) in partial_links
@@ -128,7 +167,7 @@ function _add_linkeq_terms(modelnodes::Vector{ModelNode})
 end
 
 function _add_linkineq_terms(modelnodes::Vector{ModelNode})
-    linkineqconstraints = OrderedDict()
+    linkineqconstraints = Plasmo.DataStructures.OrderedDict()
     for node in modelnodes
         partial_links = node.partial_linkineqconstraints
         for (idx,linkconstraint) in partial_links

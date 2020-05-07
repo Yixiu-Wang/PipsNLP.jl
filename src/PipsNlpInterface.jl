@@ -87,17 +87,32 @@ function pipsnlp_solve(graph::ModelGraph) #Assume graph variables and constraint
 
     #Possible BUG this list is not correct for each subproblem.  The nodeid from PIPS doesn't match the model index here
     submodels = [getmodel(getnode(graph,i)) for i = 1:length(getnodes(graph))]
-
-
     scen = length(submodels)
+
+    #master will depend on whether the modelgraph is given in the form of subgraphs or not
     #############################
-    #master = getmodel(getmasternode(graph))
     master = JuMP.Model()
     modelList = [master; submodels]
 
     #Add PIPSNLPData to each model
     for (idx,node) in enumerate(modelList)
         node.ext[:Data] = PIPSNLPData()
+    end
+
+    # This is the wrong way to do this.  These are dictionaries
+    # linkeqconstraints = [[link for link in edge.linkeqconstraints] for edge in getedges(graph)]
+    # linkineqconstraints = [[link for link in edge.linkineqconstraints] for edge in getedges(graph)]
+
+
+    linkeqconstraints = Dict()
+    linkineqconstraints = Dict()
+    for edge in getedges(graph)
+        for (idx,link) in edge.linkeqconstraints
+            linkeqconstraints[idx] = link
+        end
+        for (idx,link) in edge.linkineqconstraints
+            linkineqconstraints[idx] = link
+        end
     end
 
     #INEQUALITY LINK CONSTRAINT BOUNDS
@@ -108,11 +123,17 @@ function pipsnlp_solve(graph::ModelGraph) #Assume graph variables and constraint
         ineqlink_lb = graph.obj_dict[:linkineq_lower]
         ineqlink_ub = graph.obj_dict[:linkineq_upper]
     else
-        nlinkeq = length(graph.linkeqconstraints)                 #Link constraint equalities
-        nlinkineq = length(graph.linkineqconstraints)
+
+        # nlinkeq = length(graph.linkeqconstraints)                 #Link constraint equalities
+        # nlinkineq = length(graph.linkineqconstraints)
+        # ineqlink_lb = zeros(nlinkineq)
+        # ineqlink_ub = zeros(nlinkineq)
+
+        nlinkeq = length(linkeqconstraints)                 #Link constraint equalities
+        nlinkineq = length(linkineqconstraints)
         ineqlink_lb = zeros(nlinkineq)
         ineqlink_ub = zeros(nlinkineq)
-        for (idx,link) in graph.linkineqconstraints
+        for (idx,link) in linkineqconstraints# graph.linkineqconstraints
             row = idx
             if isa(link.set,MOI.LessThan)
                 ineqlink_lb[row] = -Inf
@@ -129,7 +150,7 @@ function pipsnlp_solve(graph::ModelGraph) #Assume graph variables and constraint
 
     #INEQUALITY CONSTRAINTS
     #Populate Connection Matrix
-    for (idx,link) in graph.linkineqconstraints
+    for (idx,link) in linkineqconstraints #graph.linkineqconstraints
         row = idx
         for (var,coeff) in link.func.terms
             node = var.model
@@ -148,7 +169,7 @@ function pipsnlp_solve(graph::ModelGraph) #Assume graph variables and constraint
     eqlink_ub = zeros(nlinkeq)
     #LINKCONSTRAINTS BETWEEN SUBPROBLEMS
     #EQUALITY CONSTRAINTS
-    for (idx,link) in graph.linkeqconstraints
+    for (idx,link) in linkeqconstraints #graph.linkeqconstraints
         row = idx
         eqlink_lb[row] = link.set.value
         eqlink_ub[row] = link.set.value
