@@ -15,14 +15,8 @@ function distribute(mg::ModelGraph,to_workers::Vector{Int64};remote_name = :grap
     node_indices = [getindex(mg,node) for node in nodes]
 
 
-    # linkeqconstraints = []
-    # linkineqconstraints = []
-    # for edge in getedges(mg)
-    #     append!(linkeqconstraints,edge.linkeqconstraints)
-    #     append!(linkineqconstraints,edge.linkineqconstraints)
-    # end
-    linkeqconstraints = Dict()
-    linkineqconstraints = Dict()
+    linkeqconstraints = OrderedDict()
+    linkineqconstraints = OrderedDict()
     for edge in getedges(mg)
         for (idx,link) in edge.linkeqconstraints
             linkeqconstraints[idx] = link
@@ -118,25 +112,35 @@ function _create_worker_modelgraph(modelnodes::Vector{ModelNode},node_indices::V
     linkineqconstraints = _add_linkineq_terms(modelnodes)
 
     #Need to match both equality and inequality
+    #Add linkconstraints, then fix indices
     for (idx,link) in linkeqconstraints
-        cref = Plasmo.add_link_equality_constraint(graph,JuMP.ScalarConstraint(link.func,link.set))
-        #need to change the constraint index to mathc the original linkconstraint
-        linkedge = cref.linkedge
-        old_idx = graph.linkeqconstraint_index
+        cref = Plasmo.add_link_equality_constraint(graph,JuMP.ScalarConstraint(link.func,link.set);eq_idx = idx)
 
-        linkedge.linkeqconstraints[idx] = linkedge.linkeqconstraints[old_idx]
-        if old_idx != idx
-            delete!(linkedge.linkeqconstraints,old_idx)
-        end
+        # #need to change the constraint index to match the original linkconstraint
+        # linkedge = cref.linkedge
+        # old_idx = graph.linkeqconstraint_index
+        #
+        # #change index
+        # linkedge.linkeqconstraints[idx] = linkedge.linkeqconstraints[old_idx]
+        #
+        # #we don't always want to delete
+        # if old_idx != idx &&  linkedge.linkeqconstraints[old_idx]
+        #     delete!(linkedge.linkeqconstraints,old_idx)
+        # end
+
     end
+
+
+
     for (idx,link) in linkineqconstraints
-        cref = Plasmo.add_link_inequality_constraint(graph,JuMP.ScalarConstraint(link.func,link.set))
-        linkedge = cref.linkedge
-        old_idx = graph.linkineqconstraint_index
-        linkedge.linkineqconstraints[idx] = linkedge.linkineqconstraints[old_idx] #old_idx is the wrong index
-        if old_idx != idx
-            delete!(linkedge.linkineqconstraints,old_idx)
-        end
+        cref = Plasmo.add_link_inequality_constraint(graph,JuMP.ScalarConstraint(link.func,link.set);ineq_idx = idx)
+        # linkedge = cref.linkedge
+        # old_idx = graph.linkineqconstraint_index
+        # linkedge.linkineqconstraints[idx] = linkedge.linkineqconstraints[old_idx] #old_idx is the wrong index
+        #
+        # if old_idx != idx
+        #     delete!(linkedge.linkineqconstraints,old_idx)
+        # end
     end
 
     #Tell the worker how many linkconstraints the graph actually has
@@ -148,7 +152,7 @@ function _create_worker_modelgraph(modelnodes::Vector{ModelNode},node_indices::V
 end
 
 function _add_linkeq_terms(modelnodes::Vector{ModelNode})
-    linkeqconstraints = Plasmo.DataStructures.OrderedDict()
+    linkeqconstraints = OrderedDict()
     for node in modelnodes
         partial_links = node.partial_linkeqconstraints
         for (idx,linkconstraint) in partial_links
@@ -169,7 +173,7 @@ function _add_linkeq_terms(modelnodes::Vector{ModelNode})
 end
 
 function _add_linkineq_terms(modelnodes::Vector{ModelNode})
-    linkineqconstraints = Plasmo.DataStructures.OrderedDict()
+    linkineqconstraints = OrderedDict()
     for node in modelnodes
         partial_links = node.partial_linkineqconstraints
         for (idx,linkconstraint) in partial_links

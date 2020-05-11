@@ -5,6 +5,7 @@ using JuMP
 using Libdl
 using MPI
 using Distributed
+using DataStructures
 
 export pipsnlp_solve, distribute
 
