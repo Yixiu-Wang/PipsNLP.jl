@@ -3,6 +3,7 @@ module PipsNlpInterface
 #Import Packages
 using SparseArrays
 using LinearAlgebra
+using DataStructures
 import MPI
 
 import JuMP
@@ -103,9 +104,9 @@ function pipsnlp_solve(graph::ModelGraph) #Assume graph variables and constraint
     # linkeqconstraints = [[link for link in edge.linkeqconstraints] for edge in getedges(graph)]
     # linkineqconstraints = [[link for link in edge.linkineqconstraints] for edge in getedges(graph)]
 
-
-    linkeqconstraints = Dict()
-    linkineqconstraints = Dict()
+    #Need to use OrderedDict or else different processes will have slightly different link matrices
+    linkeqconstraints = OrderedDict()
+    linkineqconstraints = OrderedDict()
     for edge in getedges(graph)
         for (idx,link) in edge.linkeqconstraints
             linkeqconstraints[idx] = link
