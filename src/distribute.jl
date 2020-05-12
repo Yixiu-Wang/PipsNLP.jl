@@ -8,6 +8,8 @@ function distribute(mg::ModelGraph,to_workers::Vector{Int64};remote_name = :grap
     channel_nodes = RemoteChannel(1)    #we will allocate and send nodes to workers
     channel_indices = RemoteChannel(1)
 
+    to_workers = sort(to_workers)
+    
     n_nodes = getnumnodes(mg)
     n_workers = length(to_workers)
     nodes_per_worker = Int64(floor(n_nodes/n_workers))
