@@ -1,11 +1,6 @@
 using Plasmo
-using Ipopt
 
 graph = ModelGraph()
-optimizer = Ipopt.Optimizer
-
-# @linkvariable(graph,z[1:2])
-# @masterconstraint(graph,z[1] + z[2] <= 2)
 
 #Add nodes to a GraphModel
 n1 = add_node!(graph)
@@ -25,11 +20,3 @@ n2 = add_node!(graph)
 
 #Link constraints take the same expressions as the JuMP @constraint macro
 @linkconstraint(graph,n1[:x] == n2[:x])
-#@graphobjective(graph,Min,n1[:y] + n2[:x])
-
-# optimize!(graph,optimizer)
-#
-# println("n1[:x]= ",nodevalue(n1[:x]))
-# println("n1[:y]= ",nodevalue(n1[:y]))
-# println("n2[:x]= ",nodevalue(n2[:x]))
-# println("objective = ", objective_value(graph))
