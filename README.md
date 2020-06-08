@@ -22,11 +22,11 @@ using MPIClusterManagers # to import MPIManager
 using Distributed   # need to also import Distributed to use addprocs()
 using Plasmo
 
-graph = ModelGraph()
+graph = OptiGraph()
 
 #Add nodes to a GraphModel
-@node(graph,n1)
-@node(graph,n2)
+@optinode(graph,n1)
+@optinode(graph,n2)
 
 @variable(n1,0 <= x <= 2)
 @variable(n1,0 <= y <= 3)
