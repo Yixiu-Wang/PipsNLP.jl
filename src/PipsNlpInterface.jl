@@ -735,6 +735,7 @@ function pipsnlp_solve(graph::ModelGraph) #Assume graph variables and constraint
             node.ext[:colVal] = local_data.x_sol
         end
     end
+
     status = :Unknown
     if ret == 0
         status = :Optimal
@@ -755,4 +756,4 @@ end  #end pips_nlp_solve
 
 end #end module
 
-#NOTE: linkconstraint bounds need to be on every worker.  Testing whether workers can use zeros for bounds they don't need.
+#NOTE: linkconstraint bounds need to be on every worker.  Currently testing whether workers can use zeros for bounds they don't need.
