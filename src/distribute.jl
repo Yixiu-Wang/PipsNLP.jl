@@ -1,5 +1,5 @@
 #Distribute a modelgraph among workers.  Each worker should have the same master model.  Each worker will be allocated some of the nodes in the original modelgraph
-function distribute(mg::ModelGraph,to_workers::Vector{Int64};remote_name = :graph)
+function distribute(mg::OptiGraph,to_workers::Vector{Int64};remote_name = :graph)
     #NOTE: Linkconstraints keep their indices in new graphs, NOTE: Link constraint row index needs to match on each worker
     #NOTE: Does not yet support subgraphs.  Aggregate first
     #Create remote channel to store the nodes we want to send
@@ -9,7 +9,7 @@ function distribute(mg::ModelGraph,to_workers::Vector{Int64};remote_name = :grap
     channel_indices = RemoteChannel(1)
 
     to_workers = sort(to_workers)
-    
+
     n_nodes = getnumnodes(mg)
     n_workers = length(to_workers)
     nodes_per_worker = Int64(floor(n_nodes/n_workers))
@@ -84,10 +84,10 @@ function distribute(mg::ModelGraph,to_workers::Vector{Int64};remote_name = :grap
     return remote_references
 end
 
-function _create_worker_modelgraph(modelnodes::Vector{ModelNode},node_indices::Vector{Int64},n_nodes::Int64,n_linkeq_cons::Int64,n_linkineq_cons::Int64,
+function _create_worker_modelgraph(modelnodes::Vector{OptiNode},node_indices::Vector{Int64},n_nodes::Int64,n_linkeq_cons::Int64,n_linkineq_cons::Int64,
     link_ineq_lower::Vector,link_ineq_upper::Vector)
-    graph = ModelGraph()
-    graph.node_idx_map = Dict{ModelNode,Int64}()
+    graph = OptiGraph()
+    graph.node_idx_map = Dict{OptiNode,Int64}()
 
     #Add nodes to worker's graph.  Each worker should have the same number of nodes, but some will be empty.
     for i = 1:n_nodes
@@ -153,7 +153,7 @@ function _create_worker_modelgraph(modelnodes::Vector{ModelNode},node_indices::V
     return graph
 end
 
-function _add_linkeq_terms(modelnodes::Vector{ModelNode})
+function _add_linkeq_terms(modelnodes::Vector{OptiNode})
     linkeqconstraints = OrderedDict()
     for node in modelnodes
         partial_links = node.partial_linkeqconstraints
@@ -174,7 +174,7 @@ function _add_linkeq_terms(modelnodes::Vector{ModelNode})
     return linkeqconstraints
 end
 
-function _add_linkineq_terms(modelnodes::Vector{ModelNode})
+function _add_linkineq_terms(modelnodes::Vector{OptiNode})
     linkineqconstraints = OrderedDict()
     for node in modelnodes
         partial_links = node.partial_linkineqconstraints

@@ -70,11 +70,11 @@ function getData(m::JuMP.Model)
     end
 end
 
-function pipsnlp_solve(graph::ModelGraph) #Assume graph variables and constraints are first stage
+function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints are first stage
 
     #TODO SUBGRAPHS with linkconstraints to subnodes
     if has_subgraphs(graph)
-        error("The PIPS-NLP does not yet support ModelGraphs with subgraphs.  You will need to aggregate the graph before calling pipsnlp_solve")
+        error("The PIPS-NLP does not yet support OptiGraphs with subgraphs.  You will need to aggregate the graph before calling pipsnlp_solve")
     end
 
     if has_NLlinkconstraints(graph)
@@ -711,7 +711,7 @@ function pipsnlp_solve(graph::ModelGraph) #Assume graph variables and constraint
         println("PIPS-NLP time:   ",  time() - t1, " (s)")
     end
 
-    #TODO.  Put solution onto actual ModelNode
+    #TODO.  Put solution onto actual OptiNode
     for (idx,node) in enumerate(modelList)  #set solution values for each model
         local_data = getData(node)
         if idx != 1
