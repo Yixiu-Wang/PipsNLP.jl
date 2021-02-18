@@ -7,78 +7,82 @@ using DataStructures
 import MPI
 
 import JuMP
-import MathOptInterface #Lowlevel Interface
+import MathOptInterface
 const MOI = MathOptInterface
 using Plasmo
 
 include("PipsNlpCInterface.jl")
 using .PipsNlpSolver
 
-include("pipshelpers.jl")
+include("pips_utils.jl")
+include("nlp_evaluator.jl")
+
 export pipsnlp_solve
 
 mutable struct PIPSNLPData
-    d::Union{JuMP.NLPEvaluator,Nothing}               #NLP evaluator
+    d::Union{JuMP.NLPEvaluator,Nothing}
     n::Int
     m::Int
-    local_m::Int
-    jacnnz::Int                     #Jacobian nonzeros
-    hessnnz::Int                    #Hessian nonzeros
-    firstIeq::Vector{Int}           #row index of equality constraint in 1st stage
-    firstJeq::Vector{Int}           #column index of equality constraint in 1st stage
-    firstVeq::Vector{Float64}       #coefficient of variable in equality constraint in 1st stage
-    secondIeq::Vector{Int}          #row index of equality constraint in 2nd stage
-    secondJeq::Vector{Int}          #column index of equality constraint in 2nd stage
-    secondVeq::Vector{Float64}      #coefficient of variable in equality constraint in 2nd stage
-    firstIineq::Vector{Int}
+    local_m::Int                    #rank row dimension
+    jacnnz::Int                     #Jacobian num nonzeros
+    hessnnz::Int                    #Hessian num nonzeros
+    firstIeq::Vector{Int}           #first stage equality constraint jacobian nonzero rows
+    firstJeq::Vector{Int}           #first stage equality constraint jacobian nonzero cols
+    firstVeq::Vector{Float64}       #first stage equality constraint jacobian values
+    secondIeq::Vector{Int}          #second stage equality constraint jacobian nonzero rows
+    secondJeq::Vector{Int}          #second stage equality constraint jacobian nonzero cols
+    secondVeq::Vector{Float64}      #second stage equality constraint jacobian values
+    firstIineq::Vector{Int}         #first stage inequality constraint jacobian nonzero rows
     firstJineq::Vector{Int}
     firstVineq::Vector{Float64}
     secondIineq::Vector{Int}
     secondJineq::Vector{Int}
     secondVineq::Vector{Float64}
-    num_eqconnect::Int
-    num_ineqconnect::Int
-    eqconnect_lb::Vector{Float64}
-    eqconnect_ub::Vector{Float64}
-    ineqconnect_lb::Vector{Float64}
-    ineqconnect_ub::Vector{Float64}
-    eq_idx::Vector{Int}
-    ineq_idx::Vector{Int}
+    num_eqconnect::Int              #num equalities connecting first to second stage
+    num_ineqconnect::Int            #num inequalities connecting first to second stage
+    eqconnect_lb::Vector{Float64}   #connection equality lower bounds
+    eqconnect_ub::Vector{Float64}   #connection equality upper bounds
+    ineqconnect_lb::Vector{Float64} #connection inequality lower bounds
+    ineqconnect_ub::Vector{Float64} #connection inequality upper bounds
+    eq_idx::Vector{Int}             #equality connect indices
+    ineq_idx::Vector{Int}           #inequality connect indices
     firstJeqmat
     secondJeqmat
     firstJineqmat
     secondJineqmat
-    linkIeq::Vector{Int}
-    linkJeq::Vector{Int}
-    linkVeq::Vector{Float64}
+    linkIeq::Vector{Int}            #equality link jacobian rows
+    linkJeq::Vector{Int}            #equality link jacobian cols
+    linkVeq::Vector{Float64}        #equality link jacobian values
     linkIineq::Vector{Int}
     linkJineq::Vector{Int}
     linkVineq::Vector{Float64}
-    x_sol::Vector{Float64}
-    coreid::Int
+    x_sol::Vector{Float64}          #solution
+    coreid::Int                     #rank
     loaded::Bool
-    local_unsym_hessnnz::Int   #number of nonzero values in the unsymmetric hessian (half the hessian)
+    local_unsym_hessnnz::Int        #local hessian num nonzeros
 end
-PIPSNLPData() = PIPSNLPData(nothing,0,0,0,0,0,Int[],Int[], Float64[], Int[], Int[], Float64[],Int[],Int[],Float64[], Int[], Int[], Float64[], 0, 0, Float64[],Float64[],Float64[],Float64[], Int[], Int[],nothing, nothing, nothing, nothing, Int[],Int[], Float64[], Int[], Int[], Float64[],Float64[], 0, false, 0)
+PIPSNLPData() = PIPSNLPData(nothing,0,0,0,0,0,Int[],Int[], Float64[], Int[], Int[], Float64[],Int[],Int[],Float64[], Int[], Int[],
+                            Float64[], 0, 0, Float64[],Float64[],Float64[],Float64[], Int[], Int[],
+                            nothing, nothing, nothing, nothing, Int[],Int[], Float64[], Int[], Int[], Float64[],Float64[], 0, false, 0)
 
-#Helper function
-function getData(m::JuMP.Model)
-    if haskey(m.ext, :Data)
-        return m.ext[:Data]
-    else
-        error("This functionality is only available to model with PIPS-NLP extension data")
-    end
+
+function _get_pips_data(node::OptiNode)
+    return node.ext[:pips_data]
 end
 
 function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints are first stage
+    #Check structure: 3 possibilities
+    #1.) optigraph without subgraphs (only link constraints, no first stage -> second stage constraints)
+    #2.) optigraph with single subgraph (first stage and linkconstraints between optinodes)
+    #3.) optigraph with multiple subgraphs (first stage and linkconstraints between subgraphs) Not yet supported
 
-    #TODO SUBGRAPHS with linkconstraints to subnodes
-    if has_subgraphs(graph)
-        error("The PIPS-NLP does not yet support OptiGraphs with subgraphs.  You will need to aggregate the graph before calling pipsnlp_solve")
-    end
-
-    if has_NLlinkconstraints(graph)
-        error("PIPS-NLP does not support nonlinear linkconstraints.  You will need to write your problem such that links are all linear")
+    if !(has_subgraphs(graph))
+        first_stage = OptiNode() #empty first stage
+        submodels = all_nodes(graph)
+    elseif length(graph.subgraphs) == 1
+        num_nodes(graph) == 1 || error("Incompatible optigraph structure.  Optigraph contains a single subgraph, but has multiple optinodes in highest level graph.")
+        first_stage = getnode(graph,1)
+        submodels = all_nodes(graph.subgraphs[1])
     end
 
     comm = MPI.COMM_WORLD
@@ -86,76 +90,110 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
         println("Building Model for PIPS-NLP")
     end
 
-    #Possible BUG this list is not correct for each subproblem.  The nodeid from PIPS doesn't match the model index here
-    submodels = [getmodel(getnode(graph,i)) for i = 1:length(getnodes(graph))]
-    scen = length(submodels)
+    n_sub_models = length(submodels)
 
-    #master will depend on whether the modelgraph is given in the form of subgraphs or not
-    #############################
-    master = JuMP.Model()
-    modelList = [master; submodels]
-
-    #Add PIPSNLPData to each model
-    for (idx,node) in enumerate(modelList)
-        node.ext[:Data] = PIPSNLPData()
+    model_list = [first_stage; submodels]
+    for (idx,node) in enumerate(model_list)
+        node.ext[:pips_data] = PIPSNLPData()
     end
 
-    # This is the wrong way to do this.  These are dictionaries
-    # linkeqconstraints = [[link for link in edge.linkeqconstraints] for edge in getedges(graph)]
-    # linkineqconstraints = [[link for link in edge.linkineqconstraints] for edge in getedges(graph)]
+    #Assume every worker has every linkconstraint that connects across nodes
+    #TODO: MPI.ALLGATHER! to setup linkconstraints when they are different across workers
+    #NOTE: linkconstraint bounds need to be on every rank.
+    #TODO: Check whether workers can use zeros for bounds they don't need.
 
-    #Need to use OrderedDict or else different processes will have slightly different link matrices
-    linkeqconstraints = OrderedDict()
-    linkineqconstraints = OrderedDict()
-    for edge in getedges(graph)
-        for (idx,link) in edge.linkeqconstraints
-            linkeqconstraints[idx] = link
-        end
-        for (idx,link) in edge.linkineqconstraints
-            linkineqconstraints[idx] = link
-        end
-    end
+    #IDENTIFY LINK CONSTRAINTS
+    # link_constraints = all_linkconstraints(graph)
+    link_connect_eq,link_connect_ineq,link_eq_constraints,link_ineq_constraints  = _identify_linkconstraints(graph)
 
-    #INEQUALITY LINK CONSTRAINT BOUNDS
-    if haskey(graph.obj_dict,:n_linkeq_cons)   #If we know how many linkconstraints there are:
-        @assert haskey(graph.obj_dict,:n_linkineq_cons)
-        nlinkeq = graph.obj_dict[:n_linkeq_cons]
-        nlinkineq = graph.obj_dict[:n_linkineq_cons]
-        ineqlink_lb = graph.obj_dict[:linkineq_lower]
-        ineqlink_ub = graph.obj_dict[:linkineq_upper]
-    else
-
-        # nlinkeq = length(graph.linkeqconstraints)                 #Link constraint equalities
-        # nlinkineq = length(graph.linkineqconstraints)
-        # ineqlink_lb = zeros(nlinkineq)
-        # ineqlink_ub = zeros(nlinkineq)
-
-        nlinkeq = length(linkeqconstraints)                 #Link constraint equalities
-        nlinkineq = length(linkineqconstraints)
-        ineqlink_lb = zeros(nlinkineq)
-        ineqlink_ub = zeros(nlinkineq)
-        for (idx,link) in linkineqconstraints# graph.linkineqconstraints
-            row = idx
-            if isa(link.set,MOI.LessThan)
-                ineqlink_lb[row] = -Inf
-                ineqlink_ub[row] = link.set.upper
-            elseif isa(link.set,MOI.GreaterThan)
-                ineqlink_lb[row] = link.set.lower
-                ineqlink_ub[row] = Inf
-            elseif isa(link.set,MOI.Interval)
-                ineqlink_lb[row] = link.set.lower
-                ineqlink_ub[row] = link.set.upper
+    #FIRST STAGE - SECOND STAGE LINK CONSTRAINTS (i.e. coupling variable)
+    for link in link_connect_eq
+        node = _get_subnode(link)
+        local_data = _get_pips_data(node)
+        firstIeq = local_data.firstIeq
+        firstJeq = local_data.firstJeq
+        firstVeq = local_data.firstVeq
+        secondIeq = local_data.secondIeq
+        secondJeq = local_data.secondJeq
+        secondVeq = local_data.secondVeq
+        push!(local_data.eqconnect_lb, link.set.value)
+        push!(local_data.eqconnect_ub, link.set.value)
+        local_data.num_eqconnect += 1
+        row = local_data.num_eqconnect
+        for (var,coeff) in link.func.terms
+            if getnode(var) == first_stage
+                push!(firstIeq, row)
+                push!(firstJeq, var.index.value)
+                push!(firstVeq, coeff)
+            else
+                @assert getnode(var) == node
+                push!(secondIeq, row)
+                push!(secondJeq, var.index.value)
+                push!(secondVeq, coeff)
             end
         end
     end
 
-    #INEQUALITY CONSTRAINTS
-    #Populate Connection Matrix
-    for (idx,link) in linkineqconstraints #graph.linkineqconstraints
-        row = idx
+    for link in link_connect_ineq
+        node = _get_subnode(link)
+        firstIineq = local_data.firstIineq
+        firstJineq = local_data.firstJineq
+        firstVineq = local_data.firstVineq
+        secondIineq = local_data.secondIineq
+        secondJineq = local_data.secondJineq
+        secondVineq = local_data.secondVineq
+        if isa(link.set,MOI.LessThan)
+            push!(local_data.ineqconnect_lb, -Inf)
+            push!(local_data.ineqconnect_ub, link.set.upper)
+        elseif isa(link.set,MOI.GreaterThan)
+            push!(local_data.ineqconnect_lb, link.set.lower)
+            push!(local_data.ineqconnect_ub, Inf)
+        elseif isa(link.set,MOI.Interval)
+            push!(local_data.ineqconnect_lb, link.set.lower)
+            push!(local_data.ineqconnect_ub, link.set.upper)
+        end
+        local_data.num_ineqconnect += 1
+        row = local_data.num_ineqconnect
         for (var,coeff) in link.func.terms
-            node = var.model
-            local_data = getData(node)
+            if getnode(var) == first_stage
+                push!(firstIineq, row)
+                push!(firstJineq, var.index.value)
+                push!(firstVineq, ind)
+            else
+                @assert getnode(var) == node
+                push!(secondIineq, row)
+                push!(secondJineq, var.index.value)
+                push!(secondVineq, ind)
+            end
+        end
+    end
+
+    #SUBNODE LINK CONSTRAINTS
+    nlinkeq = length(linkeqconstraints)
+    nlinkineq = length(linkineqconstraints)
+    ineqlink_lb = zeros(nlinkineq)
+    ineqlink_ub = zeros(nlinkineq)
+    eqlink_lb = zeros(nlinkeq)
+    eqlink_ub = zeros(nlinkeq)
+
+    #INEQUALITY CONSTRAINTS
+    #Inequality bounds
+    for (idx,link) in linkineqconstraints
+        row = idx
+        if isa(link.set,MOI.LessThan)
+            ineqlink_lb[row] = -Inf
+            ineqlink_ub[row] = link.set.upper
+        elseif isa(link.set,MOI.GreaterThan)
+            ineqlink_lb[row] = link.set.lower
+            ineqlink_ub[row] = Inf
+        elseif isa(link.set,MOI.Interval)
+            ineqlink_lb[row] = link.set.lower
+            ineqlink_ub[row] = link.set.upper
+        end
+        #Inequality values
+        for (var,coeff) in link.func.terms
+            node = getnode(var)
+            local_data = _get_pips_data(node)
             linkIineq = local_data.linkIineq
             linkJineq = local_data.linkJineq
             linkVineq = local_data.linkVineq
@@ -165,19 +203,17 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
         end
     end
 
-    #NOTE: linkconstraint bounds need to be on every worker.  Testing whether workers can use zeros for bounds they don't need.
-    eqlink_lb = zeros(nlinkeq)
-    eqlink_ub = zeros(nlinkeq)
-    #LINKCONSTRAINTS BETWEEN SUBPROBLEMS
     #EQUALITY CONSTRAINTS
-    for (idx,link) in linkeqconstraints #graph.linkeqconstraints
+    for (idx,link) in linkeqconstraints
         row = idx
+        #Equality bounds
         eqlink_lb[row] = link.set.value
         eqlink_ub[row] = link.set.value
-        #Populate Connection Matrix
+
+        #Equality values
         for (var,coeff) in link.func.terms
-            node = var.model
-            local_data = getData(node)
+            node = getnode(var)
+            local_data = _get_pips_data(node)
             linkIeq = local_data.linkIeq
             linkJeq = local_data.linkJeq
             linkVeq = local_data.linkVeq
@@ -187,81 +223,29 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
         end
     end
 
-    #NOTE: num_eqconnect and num_ineqconnect are zero for now since there is technically no master node here.
+    #Add constraint data for each node to help with function evaluations
+    constraint_data = get_constraint_data(node)
+    node.ext[:constraint_data] = constraint_data
 
-    #Fill variable values if we have old ones
-    master_data = getData(master)
-    if haskey(master.ext, :nlinkeq)
-        nlinkeq =  master.ext[:nlinkeq]
-    end
-    if haskey(master.ext, :nlinkineq)
-        nlinkineq =  master.ext[:nlinkineq]
-    end
-    if haskey(master.ext, :eqlink_lb)
-        eqlink_lb = copy(master.ext[:eqlink_lb])
-        eqlink_ub = copy(master.ext[:eqlink_lb])
-    end
-    if haskey(master.ext, :eqlink_ub)
-        eqlink_lb = copy(master.ext[:eqlink_ub])
-        eqlink_ub = copy(master.ext[:eqlink_ub])
-    end
-    if haskey(master.ext, :ineqlink_lb)
-        ineqlink_lb = copy(master.ext[:ineqlink_lb])
-    end
-    if haskey(master.ext, :ineqlink_ub)
-        ineqlink_ub = copy(master.ext[:ineqlink_ub])
-    end
 
-    for (idx,node) in enumerate(modelList)
-        local_data = getData(node)
-        if haskey(node.ext, :linkIineq)
-            local_data.linkIineq =  copy(node.ext[:linkIineq])
-            node.ext[:linkIineq] = nothing
-        end
-        if haskey(node.ext, :linkJineq)
-            local_data.linkJineq =  copy(node.ext[:linkJineq])
-            node.ext[:linkJineq] = nothing
-        end
-        if haskey(node.ext, :linkVineq)
-            local_data.linkVineq =  copy(node.ext[:linkVineq])
-            node.ext[:linkVineq] = nothing
-        end
-        if haskey(node.ext, :linkIeq)
-            local_data.linkIeq =  copy(node.ext[:linkIeq])
-            node.ext[:linkIeq] = nothing
-        end
-        if haskey(node.ext, :linkJeq)
-            local_data.linkJeq =  copy(node.ext[:linkJeq])
-            node.ext[:linkJeq] = nothing
-        end
-        if haskey(node.ext, :linkVeq)
-            local_data.linkVeq =  copy(node.ext[:linkVeq])
-            node.ext[:linkVeq] = nothing
-        end
-
-        #Add constraint data for each node to help with function evaluations
-        constraint_data = get_constraint_data(node)
-        node.ext[:constraint_data] = constraint_data
-    end
-
+    #Initialize
     function str_init_x0(nodeid, x0)
-        node = modelList[nodeid+1]
+        node = model_list[nodeid+1]
         jump_initval = copy(JuMP.start_value.(JuMP.all_variables(node)))
         local_initval = Vector{Float64}(undef,JuMP.num_variables(node))
 
-        #TODO: Better initialization.  Picking variable values in bounds does not guarantee the initial point is feasible.
         nothing_values = isa.(jump_initval,Nothing)
         float_values = .!(nothing_values)
         local_initval[nothing_values] .= 1  #set to 1 by default
         local_initval[float_values] .= jump_initval[float_values]
-        #local_initval = min.(max.(node.colLower,local_initval),node.colUpper)
         original_copy(local_initval,x0)
     end
 
+    #Problem Info
     function str_prob_info(nodeid,flag,mode,col_lb,col_ub,row_lb,row_ub)
         if flag != 1
-            node = modelList[nodeid+1]
-            local_data = getData(node)
+            node = model_list[nodeid+1]
+            local_data = _get_pips_data(node)
             #Do a warm start on the node
             if !(local_data.loaded)
                 local_data.loaded = true
@@ -296,7 +280,6 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
 
                 #Local node data
                 local_data.m  = local_data.local_m + local_data.num_eqconnect + local_data.num_ineqconnect
-                #local_data.n = node.numCols
                 local_data.n = JuMP.num_variables(node)
                 local_data.x_sol = zeros(Float64,local_data.n)
                 local_data.firstJeqmat = sparse(local_data.firstIeq, local_data.firstJeq, local_data.firstVeq, local_data.num_eqconnect, master_data.n)
@@ -416,9 +399,9 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
 
     #x0 is first stage variable values, x1 is local values
     function str_eval_f(nodeid,x0,x1)
-    	node = modelList[nodeid+1] #Julia doesn't start index at 0
-        local_data = getData(node)
-        local_d = getData(node).d
+    	node = model_list[nodeid+1] #Julia doesn't start index at 0
+        local_data = _get_pips_data(node)
+        local_d = _get_pips_data(node).d
         if nodeid ==  0
             local_x = x0
         else
@@ -432,10 +415,10 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
     end
 
     function str_eval_g(nodeid,x0,x1,new_eq_g, new_inq_g)
-        #println("eval_g")
-        node = modelList[nodeid+1]
-        local_data = getData(node)
-        local_d = getData(node).d
+
+        node = model_list[nodeid+1]
+        local_data = _get_pips_data(node)
+        local_d = _get_pips_data(node).d
         if nodeid ==  0
             local_x = x0
         else
@@ -443,14 +426,16 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
         end
         local_g = Array{Float64}(undef,local_data.local_m)
         pips_eval_constraint(local_d, local_g, local_x)
+
+        #evaluates local constraints and connecting constraints with first stage
         new_eq_g[1:end] = [local_g[local_data.eq_idx]; local_data.firstJeqmat*x0+local_data.secondJeqmat*x1]
         new_inq_g[1:end] = [local_g[local_data.ineq_idx]; local_data.firstJineqmat*x0+local_data.secondJineqmat*x1]
 	    return Int32(1)
     end
 
     function str_write_solution(id::Integer, x::Vector{Float64}, y_eq::Vector{Float64}, y_ieq::Vector{Float64})
-        node = modelList[id+1]
-        local_data = getData(node)
+        node = model_list[id+1]
+        local_data = _get_pips_data(node)
         local_data.x_sol = copy(x)
 
         #NOTE: This won't work anymore
@@ -468,10 +453,10 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
 
     function str_eval_grad_f(rowid,colid,x0,x1,new_grad_f)
         #println("eval_grad_f")
-        node = modelList[rowid+1]
+        node = model_list[rowid+1]
         if rowid == colid
-            local_data = getData(node)
-            local_d = getData(node).d
+            local_data = _get_pips_data(node)
+            local_d = _get_pips_data(node).d
             if colid ==  0
                 local_x = x0
             else
@@ -510,8 +495,8 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
 
     function str_eval_jac_g(rowid,colid,flag, x0,x1,mode,e_rowidx,e_colptr,e_values,i_rowidx,i_colptr,i_values)
         if flag != 1 #populate parent child structure
-            node = modelList[rowid+1]
-            local_data = getData(node)
+            node = model_list[rowid+1]
+            local_data = _get_pips_data(node)
             local_m_eq = length(local_data.eq_idx)
             local_m_ineq = length(local_data.ineq_idx)
             if mode == :Structure
@@ -565,8 +550,8 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
                 end
             end
         else #populate linkconstraint structure
-            node = modelList[rowid+1]
-            local_data = getData(node)
+            node = model_list[rowid+1]
+            local_data = _get_pips_data(node)
             linkIeq = local_data.linkIeq
             linkJeq = local_data.linkJeq
             linkVeq = local_data.linkVeq
@@ -596,8 +581,8 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
 
     function str_eval_h(rowid,colid,x0,x1,obj_factor,lambda,mode,rowidx,colptr,values)
         #println("eval_h")
-        node = modelList[colid+1]
-        local_data = getData(node)
+        node = model_list[colid+1]
+        local_data = _get_pips_data(node)
         if mode == :Structure
             if rowid == colid
                 node_Hrows  = node.ext[:Hrows]
@@ -672,31 +657,31 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
         MPI.Init()
     end
 
-
     comm = MPI.COMM_WORLD
-    if(MPI.Comm_rank(comm) == 0)
+    if (MPI.Comm_rank(comm) == 0)
         t1 = time()
     end
-    #Create FakeModel (The PIPS interface model) and pass all the functions it requires
-    model = FakeModel(:Min,0, scen,str_init_x0, str_prob_info, str_eval_f, str_eval_g, str_eval_grad_f, str_eval_jac_g, str_eval_h,str_write_solution)
 
+    root = 0
+    rank = MPI.Comm_rank(comm)
 
+    #Create PipsModel (The PIPS interface model) and pass all the functions it requires
+    model = PipsModel(:Min,0, n_sub_models,str_init_x0, str_prob_info, str_eval_f, str_eval_g, str_eval_grad_f, str_eval_jac_g, str_eval_h,str_write_solution)
     prob = createProblemStruct(comm, model, true)
 
-    if MPI.Comm_rank(comm) == 0
+    if rank == 0
         println("Created PIPS-NLP Problem Struct")
     end
 
     MPI.Barrier(comm)
     ret = solveProblemStruct(prob)
 
-    if MPI.Comm_rank(comm) == 0
+    if rank == 0
         println("Solved PIPS-NLP Problem Struct")
     end
-    root = 0
-    r = MPI.Comm_rank(comm)
 
-    if MPI.Comm_rank(comm) == 0
+
+    if rank == 0
         println("Timing Results:")
         println("init_x0  ",prob.t_jl_init_x0)
         println("str_init_x0  ", prob.t_jl_str_prob_info)
@@ -711,10 +696,10 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
         println("PIPS-NLP time:   ",  time() - t1, " (s)")
     end
 
-    #TODO.  Put solution onto actual OptiNode
-    for (idx,node) in enumerate(modelList)  #set solution values for each model
-        local_data = getData(node)
-        if idx != 1
+    #TODO.  Put solution onto optinodes
+    for (idx,node) in enumerate(model_list)  #set solution values for each model
+        local_data = _get_pips_data(node)
+        if idx != 1 #all cores have the first stage
             coreid = zeros(Int, 1)
             sc = MPI.Reduce(local_data.coreid, MPI.SUM, root, comm)
             if r == root
@@ -731,6 +716,7 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
             MPI.Bcast!(local_data.x_sol, local_data.n, coreid[1], comm)
 
             node.ext[:colVal] = local_data.x_sol
+
         else
             node.ext[:colVal] = local_data.x_sol
         end
@@ -755,5 +741,3 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
 end  #end pips_nlp_solve
 
 end #end module
-
-#NOTE: linkconstraint bounds need to be on every worker.  Currently testing whether workers can use zeros for bounds they don't need.

@@ -19,9 +19,8 @@ end
 @everywhere using Plasmo
 @everywhere using PipsSolver
 #
-# #Distribute the graph to workers
+#Distribute the graph to workers
 julia_workers = collect(values(manager.mpi2j))
-
 
 remote_references = PipsSolver.distribute(graph,julia_workers,remote_name = :pipsgraph)  #create the variable graph on each worker
 
@@ -29,7 +28,6 @@ remote_references = PipsSolver.distribute(graph,julia_workers,remote_name = :pip
 r1 = fetch(remote_references[1])
 r2 = fetch(remote_references[2])
 
-#
 @mpi_do manager begin
     using MPI
     PipsSolver.pipsnlp_solve(pipsgraph)

@@ -1,23 +1,19 @@
 using Pkg
 Pkg.activate("../")
 
-using JuMP
 using Plasmo
 using MPI
-using ModelGraphMPISolvers
+using PipsSolver
 
 MPI.Init()
 
-function get_electricity_model(demand)
-    m = Model()
-    #amount of electricity produced
-    @variable(m, 0<=prod<=10, start=5)
-    #amount of electricity purchased or sold
-    @variable(m, input)
-    #amount of gas purchased
-    @variable(m, gas_purchased)
-    @constraint(m, gas_purchased >= prod)
-    @constraint(m, prod + input == demand)
+function get_simple_model(demand)
+    node = OptiNode()
+    @variable(node, 0<=prod<=10, start=5)
+    @variable(node, input)
+    @variable(node, gas_purchased)
+    @constraint(node, gas_purchased >= prod)
+    @constraint(node, prod + input == demand)
     return m
 end
 
