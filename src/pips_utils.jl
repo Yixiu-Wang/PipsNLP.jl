@@ -121,22 +121,31 @@ function convert_to_c_idx(indicies)
     end
 end
 
+#Grab the subnode in hierarchical linkconstraint link
+function _get_subnode(first_stage,link)
+	linked_nodes = getnodes(link)
+	@assert length(linked_nodes) == 2
+	sub_node = setdiff(getnodes(link),[first_stage])[1]
+	return sub_node
+end
 
+#categorize link constraints into hierarchical and distributed
 function _identify_linkconstraints(graph::OptiGraph)
     links_connect_eq = LinkConstraint[]
     links_connect_ineq = LinkConstraint[]
     links_eq = LinkConstraint[]
     links_ineq = LinkConstraint[]
 
-    first_stage_node = getnode(graph,1)
+    first_stage_nodes = getnodes(graph)
 
-    sub_nodes = setdiff(all_nodes(graph),[first_stage_node])
+    sub_nodes = setdiff(all_nodes(graph),first_stage_nodes)
 
     for link in all_linkconstraints(graph)
         link_constraint = constraint_object(link)
         link_nodes = getnodes(link_constraint)
 
-        if first_stage_node in link_nodes
+        #if first_stage_node in link_nodes
+		if isempty(setdiff(first_stage_nodes,link_nodes))
             @assert length(link_nodes) == 2
             if isa(link_constraint.set,MOI.EqualTo)
                 push!(links_connect_eq,link_constraint)

@@ -44,15 +44,16 @@ for j in 1:Ns
     if round(Int, floor((s-1)/SPP)) == rank
         push!(owned, s)
         #get scenario model and append to parent node
-        scenm[j] = get_electricity_model(demand[j])
+        scenm[j] = get_simple_model(demand[j])
         node = add_node!(graph,scenm[j])
         scen_nodes[j] = node
+
         #connect children and parent variables
         @linkconstraint(graph, master[:gas_purchased] == scenm[j][:gas_purchased])
         #reconstruct second stage objective
         @objective(scenm[j],Min,1/Ns*(scenm[j][:prod] + 3*scenm[j][:input]))
-    else #
-        scenm[j] = Model()
+    else #Ghost nodes
+        scenm[j] = OptiNode()
         node = add_node!(graph, scenm[j])
         scen_nodes[j] = node
     end
@@ -62,14 +63,13 @@ end
 #@linkconstraint(graph, (1/Ns)*sum(scenm[s][:prod] for s in 1:Ns) == 8)
 @linkconstraint(graph, (1/Ns)*sum(scenm[s][:prod] for s in owned) == 8)
 
+
 if rank == 0
     println("Solving with PIPS-NLP")
 end
 pipsnlp_solve(graph)
-
-# if rank == 0
-#     @show objective_value(graph)
-# end
-
+if rank == 0
+    @show objective_value(graph)
+end
 
 MPI.Finalize()

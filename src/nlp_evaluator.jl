@@ -1,5 +1,5 @@
 #NOTE: These are helper functions to get data from JuMP models into the PIPS-NLP Interface.
-#Some functions taken from Ipopt.jl
+#The implementation here was heavily framed around the code in Ipopt.jl
 
 mutable struct ConstraintData
     linear_le_constraints::Vector{JuMP.ScalarConstraint{JuMP.GenericAffExpr{Float64,JuMP.VariableRef},MathOptInterface.LessThan{Float64}}}
@@ -15,16 +15,15 @@ end
 
 ConstraintData() = ConstraintData([], [], [], [], [], [],[],[],[])
 
-function get_constraint_data(m::JuMP.Model)
+function get_constraint_data(node::OptiNode)
 	con_data = ConstraintData()
-
-	constraint_types = JuMP.list_of_constraint_types(m)
+	constraint_types = JuMP.list_of_constraint_types(node)
 
     for (func,set) in constraint_types
         if func == JuMP.VariableRef 	#This is a variable bound, not a PIPS-NLP constraint
 			continue
 		else
-	        constraint_refs = JuMP.all_constraints(m, func, set)
+	        constraint_refs = JuMP.all_constraints(node, func, set)
 	        for constraint_ref in constraint_refs
 	            constraint = JuMP.constraint_object(constraint_ref)
 
@@ -57,8 +56,8 @@ function get_constraint_data(m::JuMP.Model)
 	        end
         end
     end
-	if m.nlp_data != nothing
-		con_data.nonlinear_constraints = m.nlp_data.nlconstr
+	if node.nlp_data != nothing
+		con_data.nonlinear_constraints = node.nlp_data.nlconstr
 	end
 	return con_data
 end
@@ -137,23 +136,23 @@ function constraintbounds(con_data::ConstraintData)
 	return constraint_lower,constraint_upper
 end
 
-function numconstraints(m::JuMP.Model)
+function numconstraints(node::OptiNode)
     num_cons = 0
-    constraint_types = JuMP.list_of_constraint_types(m)
+    constraint_types = JuMP.list_of_constraint_types(node)
     for (func,set) in constraint_types
         if func != JuMP.VariableRef #This is a variable bound, not a PIPS-NLP constraint
-            num_cons += JuMP.num_constraints(m,func,set)
+            num_cons += JuMP.num_constraints(node,func,set)
         end
     end
-    num_cons += JuMP.num_nl_constraints(m)
+    num_cons += JuMP.num_nl_constraints(node)
     return num_cons
 end
 
-function variableupperbounds(m::JuMP.Model)
+function variableupperbounds(node::OptiNode)
     #Get upper bound variable constraints
-    upper_bounds = ones(JuMP.num_variables(m))*Inf #Assume no upper bound by default
+    upper_bounds = ones(JuMP.num_variables(node))*Inf #Assume no upper bound by default
 
-    var_bound_constraints = JuMP.all_constraints(m,JuMP.VariableRef,MOI.LessThan{Float64})
+    var_bound_constraints = JuMP.all_constraints(node,JuMP.VariableRef,MOI.LessThan{Float64})
     for var_bound_ref in var_bound_constraints
         var_constraint = JuMP.constraint_object(var_bound_ref)
         var = var_constraint.func
@@ -162,7 +161,7 @@ function variableupperbounds(m::JuMP.Model)
         upper_bounds[index.value] = upper_bound
     end
     #Get fixed variable constraints
-    var_equal_constraints = JuMP.all_constraints(m,JuMP.VariableRef,MOI.EqualTo{Float64})
+    var_equal_constraints = JuMP.all_constraints(node,JuMP.VariableRef,MOI.EqualTo{Float64})
     for var_equal_ref in var_equal_constraints
         var_constraint = JuMP.constraint_object(var_equal_ref)
         var = var_constraint.func
@@ -175,9 +174,9 @@ function variableupperbounds(m::JuMP.Model)
     return upper_bounds
 end
 
-function variablelowerbounds(m::JuMP.Model)
-    lower_bounds = ones(JuMP.num_variables(m))*-Inf #Assume no upper bound by default
-    var_bound_constraints = JuMP.all_constraints(m,JuMP.VariableRef,MOI.GreaterThan{Float64})
+function variablelowerbounds(node::OptiNode)
+    lower_bounds = ones(JuMP.num_variables(node))*-Inf #Assume no upper bound by default
+    var_bound_constraints = JuMP.all_constraints(node,JuMP.VariableRef,MOI.GreaterThan{Float64})
     for var_bound_ref in var_bound_constraints
         var_constraint = JuMP.constraint_object(var_bound_ref)
         var = var_constraint.func
@@ -186,7 +185,7 @@ function variablelowerbounds(m::JuMP.Model)
         lower_bounds[index.value] = lower_bound
     end
 
-    var_equal_constraints = JuMP.all_constraints(m,JuMP.VariableRef,MOI.EqualTo{Float64})
+    var_equal_constraints = JuMP.all_constraints(node,JuMP.VariableRef,MOI.EqualTo{Float64})
     for var_equal_ref in var_equal_constraints
         var_constraint = JuMP.constraint_object(var_equal_ref)
         var = var_constraint.func
@@ -308,7 +307,7 @@ end
 
 function pips_eval_constraint(d::JuMP.NLPEvaluator, g, x)
     row = 1
-	con_data = d.m.ext[:constraint_data]
+	con_data = getnode(d.m).ext[:constraint_data]
     @eval_function con_data.linear_le_constraints
     @eval_function con_data.linear_ge_constraints
 	@eval_function con_data.linear_interval_constraints
@@ -371,7 +370,7 @@ function pips_jacobian_structure(d::JuMP.NLPEvaluator)
 
     jacobian_sparsity = Tuple{Int64,Int64}[]
     row = 1
-	con_data = get_constraint_data(d.m)
+	con_data = get_constraint_data(getnode(d.m))
 
     @append_to_jacobian_sparsity con_data.linear_le_constraints
     @append_to_jacobian_sparsity con_data.linear_ge_constraints
@@ -385,9 +384,6 @@ function pips_jacobian_structure(d::JuMP.NLPEvaluator)
         push!(jacobian_sparsity, (nlp_row + row - 1, column))
     end
     return jacobian_sparsity
-end
-
-function pips_jacobian_structure(m::JuMP.Model)
 end
 
 #####################
@@ -415,7 +411,7 @@ end
 function pips_hessian_lagrangian_structure(d::JuMP.NLPEvaluator)
     hessian_sparsity = Tuple{Int64,Int64}[]
 	m = d.m
-	con_data = get_constraint_data(m)
+	con_data = get_constraint_data(getnode(m))
 	if m.nlp_data == nothing
 	    append_to_hessian_sparsity!(hessian_sparsity, JuMP.objective_function(m))
 	elseif m.nlp_data.nlobj == nothing
@@ -499,7 +495,7 @@ end
 function pips_eval_constraint_jacobian(d::JuMP.NLPEvaluator, jac_values, x)
     offset = 0
 	m = d.m
-	con_data = m.ext[:constraint_data]
+	con_data = getnode(m).ext[:constraint_data]
     @fill_constraint_jacobian con_data.linear_le_constraints
     @fill_constraint_jacobian con_data.linear_ge_constraints
 	@fill_constraint_jacobian con_data.linear_interval_constraints
@@ -539,7 +535,7 @@ end
 function pips_eval_hessian_lagrangian(d::JuMP.NLPEvaluator, hess_values, x, obj_factor, lambda)
     offset = 0
 	m = d.m
-	con_data = m.ext[:constraint_data]
+	con_data = getnode(m).ext[:constraint_data]
 	if !(has_nl_objective(m))
         offset += fill_hessian_lagrangian!(hess_values, 0, obj_factor, JuMP.objective_function(m))
     end

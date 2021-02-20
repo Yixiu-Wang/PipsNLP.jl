@@ -93,22 +93,27 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
     n_sub_models = length(submodels)
 
     model_list = [first_stage; submodels]
+
     for (idx,node) in enumerate(model_list)
         node.ext[:pips_data] = PIPSNLPData()
+        constraint_data = get_constraint_data(node)
+        node.ext[:constraint_data] = constraint_data
     end
+    first_stage_data = _get_pips_data(first_stage)
 
     #Assume every worker has every linkconstraint that connects across nodes
     #TODO: MPI.ALLGATHER! to setup linkconstraints when they are different across workers
-    #NOTE: linkconstraint bounds need to be on every rank.
     #TODO: Check whether workers can use zeros for bounds they don't need.
+    #TODO: Improve distribute performance.
 
     #IDENTIFY LINK CONSTRAINTS
     # link_constraints = all_linkconstraints(graph)
-    link_connect_eq,link_connect_ineq,link_eq_constraints,link_ineq_constraints  = _identify_linkconstraints(graph)
+    link_connect_eq,link_connect_ineq,linkeqconstraints,linkineqconstraints  = _identify_linkconstraints(graph)
 
-    #FIRST STAGE - SECOND STAGE LINK CONSTRAINTS (i.e. coupling variable)
+    #NOTE: linkconstraint bounds need to be on every rank.
+    #FIRST STAGE -> SECOND STAGE LINK CONSTRAINTS
     for link in link_connect_eq
-        node = _get_subnode(link)
+        node = _get_subnode(first_stage,link)::OptiNode
         local_data = _get_pips_data(node)
         firstIeq = local_data.firstIeq
         firstJeq = local_data.firstJeq
@@ -135,7 +140,7 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
     end
 
     for link in link_connect_ineq
-        node = _get_subnode(link)
+        node = _get_subnode(first_stage,link)
         firstIineq = local_data.firstIineq
         firstJineq = local_data.firstJineq
         firstVineq = local_data.firstVineq
@@ -168,7 +173,7 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
         end
     end
 
-    #SUBNODE LINK CONSTRAINTS
+    #SECOND STAGE LINK CONSTRAINTS
     nlinkeq = length(linkeqconstraints)
     nlinkineq = length(linkineqconstraints)
     ineqlink_lb = zeros(nlinkineq)
@@ -178,7 +183,7 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
 
     #INEQUALITY CONSTRAINTS
     #Inequality bounds
-    for (idx,link) in linkineqconstraints
+    for (idx,link) in enumerate(linkineqconstraints)
         row = idx
         if isa(link.set,MOI.LessThan)
             ineqlink_lb[row] = -Inf
@@ -204,7 +209,7 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
     end
 
     #EQUALITY CONSTRAINTS
-    for (idx,link) in linkeqconstraints
+    for (idx,link) in enumerate(linkeqconstraints)
         row = idx
         #Equality bounds
         eqlink_lb[row] = link.set.value
@@ -224,8 +229,7 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
     end
 
     #Add constraint data for each node to help with function evaluations
-    constraint_data = get_constraint_data(node)
-    node.ext[:constraint_data] = constraint_data
+
 
 
     #Initialize
@@ -282,9 +286,9 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
                 local_data.m  = local_data.local_m + local_data.num_eqconnect + local_data.num_ineqconnect
                 local_data.n = JuMP.num_variables(node)
                 local_data.x_sol = zeros(Float64,local_data.n)
-                local_data.firstJeqmat = sparse(local_data.firstIeq, local_data.firstJeq, local_data.firstVeq, local_data.num_eqconnect, master_data.n)
+                local_data.firstJeqmat = sparse(local_data.firstIeq, local_data.firstJeq, local_data.firstVeq, local_data.num_eqconnect, first_stage_data.n)
                 local_data.secondJeqmat = sparse(local_data.secondIeq, local_data.secondJeq, local_data.secondVeq, local_data.num_eqconnect, local_data.n)
-                local_data.firstJineqmat = sparse(local_data.firstIineq, local_data.firstJineq, local_data.firstVineq, local_data.num_ineqconnect, master_data.n)
+                local_data.firstJineqmat = sparse(local_data.firstIineq, local_data.firstJineq, local_data.firstVineq, local_data.num_ineqconnect, first_stage_data.n)
                 local_data.secondJineqmat = sparse(local_data.secondIineq, local_data.secondJineq, local_data.secondVineq, local_data.num_ineqconnect, local_data.n)
 
                 if node.nlp_data == nothing
@@ -438,16 +442,18 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
         local_data = _get_pips_data(node)
         local_data.x_sol = copy(x)
 
+        #TODO: Grab dual values
+
         #NOTE: This won't work anymore
-        if id == 0
-            #Add objective value to node
-            node.ext[:objective] = str_eval_f(id, x, nothing)
-        else
-            #node.objVal = str_eval_f(id, nothing, x)
-            node.ext[:objective] = str_eval_f(id, nothing, x)
-        end
-        r = MPI.Comm_rank(comm)
-        local_data.coreid = r
+        # if id == 0
+        #     #Add objective value to node
+        #     node.ext[:objective] = str_eval_f(id, x, nothing)
+        # else
+        #     #node.objVal = str_eval_f(id, nothing, x)
+        #     node.ext[:objective] = str_eval_f(id, nothing, x)
+        # end
+        rank = MPI.Comm_rank(comm)
+        local_data.coreid = rank
     end
 
 
@@ -510,8 +516,8 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
                     eqmat = sparse(Ieq, Jeq, Veq, local_m_eq + local_data.num_eqconnect, local_data.n)
                     ineqmat = sparse(Iineq, Jineq, Vineq, local_m_ineq + local_data.num_ineqconnect, local_data.n)
                 else
-                    eqmat = sparse(local_m_eq .+ local_data.firstIeq, local_data.firstJeq, local_data.firstVeq, local_m_eq .+ local_data.num_eqconnect, master_data.n)
-                    ineqmat = sparse(local_m_ineq .+ local_data.firstIineq, local_data.firstJineq, local_data.firstVineq, local_m_ineq .+ local_data.num_ineqconnect, master_data.n)
+                    eqmat = sparse(local_m_eq .+ local_data.firstIeq, local_data.firstJeq, local_data.firstVeq, local_m_eq .+ local_data.num_eqconnect, first_stage_data.n)
+                    ineqmat = sparse(local_m_ineq .+ local_data.firstIineq, local_data.firstJineq, local_data.firstVineq, local_m_ineq .+ local_data.num_ineqconnect, first_stage_data.n)
                 end
                 return(length(eqmat.rowval), length(ineqmat.rowval))
             else #mode = :Values
@@ -535,8 +541,8 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
                     eqmat = sparseKeepZero(Ieq, Jeq, Veq, local_m_eq + local_data.num_eqconnect, local_data.n)
                     ineqmat = sparseKeepZero(Iineq, Jineq, Vineq, local_m_ineq + local_data.num_ineqconnect, local_data.n)
                 else #evaluate
-                    eqmat = sparseKeepZero(local_m_eq .+ local_data.firstIeq, local_data.firstJeq, local_data.firstVeq, local_m_eq .+ local_data.num_eqconnect, master_data.n)
-                    ineqmat = sparseKeepZero(local_m_ineq .+ local_data.firstIineq, local_data.firstJineq, local_data.firstVineq, local_m_ineq .+ local_data.num_ineqconnect, master_data.n)
+                    eqmat = sparseKeepZero(local_m_eq .+ local_data.firstIeq, local_data.firstJeq, local_data.firstVeq, local_m_eq .+ local_data.num_eqconnect, first_stage_data.n)
+                    ineqmat = sparseKeepZero(local_m_ineq .+ local_data.firstIineq, local_data.firstJineq, local_data.firstVineq, local_m_ineq .+ local_data.num_ineqconnect, first_stage_data.n)
                 end
                 if length(eqmat.nzval) > 0
                     array_copy(eqmat.rowval,e_rowidx)
@@ -667,19 +673,21 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
 
     #Create PipsModel (The PIPS interface model) and pass all the functions it requires
     model = PipsModel(:Min,0, n_sub_models,str_init_x0, str_prob_info, str_eval_f, str_eval_g, str_eval_grad_f, str_eval_jac_g, str_eval_h,str_write_solution)
-    prob = createProblemStruct(comm, model, true)
 
+    ###################################
+    #PIPS-NLP FUNCTIONS
+    prob = createProblemStruct(comm, model, true)
     if rank == 0
         println("Created PIPS-NLP Problem Struct")
     end
 
     MPI.Barrier(comm)
     ret = solveProblemStruct(prob)
+    ###################################
 
     if rank == 0
         println("Solved PIPS-NLP Problem Struct")
     end
-
 
     if rank == 0
         println("Timing Results:")
@@ -702,26 +710,34 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
         if idx != 1 #all cores have the first stage
             coreid = zeros(Int, 1)
             sc = MPI.Reduce(local_data.coreid, MPI.SUM, root, comm)
-            if r == root
+
+            if rank == root
                 coreid[1] = sc
             end
+
             MPI.Bcast!(coreid, length(coreid), root, comm)
+
             n = zeros(Int, 1)
             n[1] = local_data.n
             MPI.Bcast!(n,      length(n),      coreid[1], comm)
-            if r != coreid[1]
+
+            if rank != coreid[1]
                 local_data.n = n[1]
                 local_data.x_sol = zeros(Float64,local_data.n)
             end
             MPI.Bcast!(local_data.x_sol, local_data.n, coreid[1], comm)
-
-            node.ext[:colVal] = local_data.x_sol
-
-        else
-            node.ext[:colVal] = local_data.x_sol
         end
+        #node.ext[:colVal] = local_data.x_sol
+        vars = MOI.get(node,MOI.ListOfVariableIndices())
+        primals = OrderedDict(zip(vars,local_data.x_sol))
+        Plasmo._set_primals(JuMP.backend(node),primals)
+
+        #TODO set duals
+
+        #TODO: Load results into a graph backend with termination status etc...
     end
 
+    #TODO: Better return status.  Return MOI status
     status = :Unknown
     if ret == 0
         status = :Optimal

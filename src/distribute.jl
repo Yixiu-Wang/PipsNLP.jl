@@ -1,5 +1,5 @@
 #Distribute a modelgraph among workers.  Each worker should have the same master model.  Each worker will be allocated some of the nodes in the original modelgraph
-function distribute(mg::OptiGraph,to_workers::Vector{Int64};remote_name = :graph)
+function distribute(graph::OptiGraph,to_workers::Vector{Int64};remote_name = :graph)
     #NOTE: Linkconstraints keep their indices in new graphs, NOTE: Link constraint row index needs to match on each worker
     #NOTE: Does not yet support subgraphs.  Aggregate first
     #Create remote channel to store the nodes we want to send
@@ -75,7 +75,7 @@ function distribute(mg::OptiGraph,to_workers::Vector{Int64};remote_name = :graph
                 Core.eval(Main, Expr(:(=), :node_indices, take!(channel_indices)))
             end
             wait(ref1)
-            ref2 = @spawnat worker Core.eval(Main, Expr(:(=), remote_name, PipsSolver._create_worker_modelgraph(getfield(Main,:nodes),getfield(Main,:node_indices),
+            ref2 = @spawnat worker Core.eval(Main, Expr(:(=), remote_name, PipsSolver._create_worker_optigraph(getfield(Main,:nodes),getfield(Main,:node_indices),
             n_nodes,n_linkeq_cons,n_linkineq_cons,ineqlink_lb,ineqlink_ub)))
             push!(remote_references,ref2)
         end
@@ -84,8 +84,9 @@ function distribute(mg::OptiGraph,to_workers::Vector{Int64};remote_name = :graph
     return remote_references
 end
 
-function _create_worker_modelgraph(modelnodes::Vector{OptiNode},node_indices::Vector{Int64},n_nodes::Int64,n_linkeq_cons::Int64,n_linkineq_cons::Int64,
+function _create_worker_optigraph(optinodes::Vector{OptiNode},node_indices::Vector{Int64},n_nodes::Int64,n_linkeq_cons::Int64,n_linkineq_cons::Int64,
     link_ineq_lower::Vector,link_ineq_upper::Vector)
+
     graph = OptiGraph()
     graph.node_idx_map = Dict{OptiNode,Int64}()
 
@@ -99,10 +100,6 @@ function _create_worker_modelgraph(modelnodes::Vector{OptiNode},node_indices::Ve
         index = node_indices[i]  #need node index in highest level
         new_node = getnode(graph,index)
         set_model(new_node,getmodel(node))
-
-        #setup new node partial constraints
-        # new_node.partial_linkeqconstraints = node.partial_linkeqconstraints
-        # new_node.partial_linkineqconstraints = node.partial_linkineqconstraints
     end
     # We need the graph to have the partial constraints over graph nodes
     # Add link constraints
