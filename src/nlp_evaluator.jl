@@ -1,189 +1,5 @@
-#############################################
-# Helpers
-#############################################
-function exchange(a,b)
-	 temp = a
-         a=b
-         b=temp
-	 return (a,b)
-end
-
-function sparseKeepZero(I::AbstractVector{Ti},
-    J::AbstractVector{Ti},
-    V::AbstractVector{Tv},
-    nrow::Integer, ncol::Integer) where {Tv,Ti<:Integer}
-    N = length(I)
-    if N != length(J) || N != length(V)
-        throw(ArgumentError("triplet I,J,V vectors must be the same length"))
-    end
-    if N == 0
-        return spzeros(eltype(V), Ti, nrow, ncol)
-    end
-
-    # Work array
-    Wj = Array{Ti}(undef,max(nrow,ncol)+1)
-    # Allocate sparse matrix data structure
-    # Count entries in each row
-    Rnz = zeros(Ti, nrow+1)
-    Rnz[1] = 1
-    nz = 0
-    for k=1:N
-        iind = I[k]
-        iind > 0 || throw(ArgumentError("all I index values must be > 0"))
-        iind <= nrow || throw(ArgumentError("all I index values must be ≤ the number of rows"))
-        Rnz[iind+1] += 1
-        nz += 1
-    end
-    Rp = cumsum(Rnz)
-    Ri = Array{Ti}(undef,nz)
-    Rx = Array{Tv}(undef,nz)
-
-    # Construct row form
-    # place triplet (i,j,x) in column i of R
-    # Use work array for temporary row pointers
-    @simd for i=1:nrow; @inbounds Wj[i] = Rp[i]; end
-    @inbounds for k=1:N
-        iind = I[k]
-        jind = J[k]
-        jind > 0 || throw(ArgumentError("all J index values must be > 0"))
-        jind <= ncol || throw(ArgumentError("all J index values must be ≤ the number of columns"))
-        p = Wj[iind]
-        Vk = V[k]
-        Wj[iind] += 1
-        Rx[p] = Vk
-        Ri[p] = jind
-    end
-
-    # Reset work array for use in counting duplicates
-    @simd for j=1:ncol; @inbounds Wj[j] = 0; end
-
-    # Sum up duplicates and squeeze
-    anz = 0
-    @inbounds for i=1:nrow
-        p1 = Rp[i]
-        p2 = Rp[i+1] - 1
-        pdest = p1
-        for p = p1:p2
-            j = Ri[p]
-            pj = Wj[j]
-            if pj >= p1
-                Rx[pj] = Rx[pj] + Rx[p]
-            else
-                Wj[j] = pdest
-                if pdest != p
-                    Ri[pdest] = j
-                    Rx[pdest] = Rx[p]
-                end
-                pdest += one(Ti)
-            end
-        end
-        Rnz[i] = pdest - p1
-        anz += (pdest - p1)
-    end
-
-    # Transpose from row format to get the CSC format
-    RiT = Array{Ti}(undef,anz)
-    RxT = Array{Tv}(undef,anz)
-
-    # Reset work array to build the final colptr
-    Wj[1] = 1
-    @simd for i=2:(ncol+1); @inbounds Wj[i] = 0; end
-    @inbounds for j = 1:nrow
-        p1 = Rp[j]
-        p2 = p1 + Rnz[j] - 1
-        for p = p1:p2
-            Wj[Ri[p]+1] += 1
-        end
-    end
-    RpT = cumsum(Wj[1:(ncol+1)])
-
-    # Transpose
-    @simd for i=1:length(RpT); @inbounds Wj[i] = RpT[i]; end
-    @inbounds for j = 1:nrow
-        p1 = Rp[j]
-        p2 = p1 + Rnz[j] - 1
-        for p = p1:p2
-            ind = Ri[p]
-            q = Wj[ind]
-            Wj[ind] += 1
-            RiT[q] = j
-            RxT[q] = Rx[p]
-        end
-    end
-
-    return SparseMatrixCSC(nrow, ncol, RpT, RiT, RxT)
-end
-
-#Convert Julia indices to C indices
-function convert_to_c_idx(indicies)
-    for i in 1:length(indicies)
-        indicies[i] = indicies[i] - 1
-    end
-end
-
 #NOTE: These are helper functions to get data from JuMP models into the PIPS-NLP Interface.
-#Some functions taken from Ipopt.jl
-function numconstraints(m::JuMP.Model)
-    num_cons = 0
-    constraint_types = JuMP.list_of_constraint_types(m)
-    for (func,set) in constraint_types
-        if func != JuMP.VariableRef #This is a variable bound, not a PIPS-NLP constraint
-            num_cons += JuMP.num_constraints(m,func,set)
-        end
-    end
-    num_cons += JuMP.num_nl_constraints(m)
-    return num_cons
-end
-
-function variableupperbounds(m::JuMP.Model)
-    #Get upper bound variable constraints
-    upper_bounds = ones(JuMP.num_variables(m))*Inf #Assume no upper bound by default
-
-    var_bound_constraints = JuMP.all_constraints(m,JuMP.VariableRef,MOI.LessThan{Float64})
-    for var_bound_ref in var_bound_constraints
-        var_constraint = JuMP.constraint_object(var_bound_ref)
-        var = var_constraint.func
-        index = var.index
-        upper_bound = var_constraint.set.upper
-        upper_bounds[index.value] = upper_bound
-    end
-    #Get fixed variable constraints
-    var_equal_constraints = JuMP.all_constraints(m,JuMP.VariableRef,MOI.EqualTo{Float64})
-    for var_equal_ref in var_equal_constraints
-        var_constraint = JuMP.constraint_object(var_equal_ref)
-        var = var_constraint.func
-        index = var.index
-        upper_bound = var_constraint.set.value
-        upper_bounds[index.value] = upper_bound
-    end
-
-    #TODO sort?
-    return upper_bounds
-end
-
-function variablelowerbounds(m::JuMP.Model)
-    lower_bounds = ones(JuMP.num_variables(m))*-Inf #Assume no upper bound by default
-    var_bound_constraints = JuMP.all_constraints(m,JuMP.VariableRef,MOI.GreaterThan{Float64})
-    for var_bound_ref in var_bound_constraints
-        var_constraint = JuMP.constraint_object(var_bound_ref)
-        var = var_constraint.func
-        index = var.index
-        lower_bound = var_constraint.set.lower
-        lower_bounds[index.value] = lower_bound
-    end
-
-    var_equal_constraints = JuMP.all_constraints(m,JuMP.VariableRef,MOI.EqualTo{Float64})
-    for var_equal_ref in var_equal_constraints
-        var_constraint = JuMP.constraint_object(var_equal_ref)
-        var = var_constraint.func
-        index = var.index
-        lower_bound = var_constraint.set.value
-        lower_bounds[index.value] = lower_bound
-    end
-
-    #TODO sort?
-    return lower_bounds
-end
+#The implementation here was heavily framed around the code in Ipopt.jl
 
 mutable struct ConstraintData
     linear_le_constraints::Vector{JuMP.ScalarConstraint{JuMP.GenericAffExpr{Float64,JuMP.VariableRef},MathOptInterface.LessThan{Float64}}}
@@ -199,16 +15,15 @@ end
 
 ConstraintData() = ConstraintData([], [], [], [], [], [],[],[],[])
 
-function get_constraint_data(m::JuMP.Model)
+function get_constraint_data(node::OptiNode)
 	con_data = ConstraintData()
-
-	constraint_types = JuMP.list_of_constraint_types(m)
+	constraint_types = JuMP.list_of_constraint_types(node)
 
     for (func,set) in constraint_types
         if func == JuMP.VariableRef 	#This is a variable bound, not a PIPS-NLP constraint
 			continue
 		else
-	        constraint_refs = JuMP.all_constraints(m, func, set)
+	        constraint_refs = JuMP.all_constraints(node, func, set)
 	        for constraint_ref in constraint_refs
 	            constraint = JuMP.constraint_object(constraint_ref)
 
@@ -241,8 +56,8 @@ function get_constraint_data(m::JuMP.Model)
 	        end
         end
     end
-	if m.nlp_data != nothing
-		con_data.nonlinear_constraints = m.nlp_data.nlconstr
+	if node.nlp_data != nothing
+		con_data.nonlinear_constraints = node.nlp_data.nlconstr
 	end
 	return con_data
 end
@@ -321,124 +136,66 @@ function constraintbounds(con_data::ConstraintData)
 	return constraint_lower,constraint_upper
 end
 
-#####################
-# JACOBIAN STRUCTURE
-#####################
-function append_to_jacobian_sparsity!(jacobian_sparsity, func::JuMP.GenericAffExpr{Float64,JuMP.VariableRef}, row)
-	aff = func
-    for term in keys(aff.terms)
-        push!(jacobian_sparsity, (row, term.index.value))
-    end
-end
-
-function append_to_jacobian_sparsity!(jacobian_sparsity, func::JuMP.GenericQuadExpr{Float64,JuMP.VariableRef}, row)
-	quad = func
-    for term in keys(quad.aff.terms)
-        push!(jacobian_sparsity, (row, term.index.value))
-    end
-    for term in keys(quad.terms)
-        row_idx = term.a.index
-        col_idx = term.b.index
-        if row_idx == col_idx
-            push!(jacobian_sparsity, (row, row_idx.value))
-        else
-            push!(jacobian_sparsity, (row, row_idx.value))
-            push!(jacobian_sparsity, (row, col_idx.value))
+function numconstraints(node::OptiNode)
+    num_cons = 0
+    constraint_types = JuMP.list_of_constraint_types(node)
+    for (func,set) in constraint_types
+        if func != JuMP.VariableRef #This is a variable bound, not a PIPS-NLP constraint
+            num_cons += JuMP.num_constraints(node,func,set)
         end
     end
+    num_cons += JuMP.num_nl_constraints(node)
+    return num_cons
 end
 
-macro append_to_jacobian_sparsity(array_name)
-    escrow = esc(:row)
-    quote
-        for constraint in $(esc(array_name))
-			func = constraint.func
-            append_to_jacobian_sparsity!($(esc(:jacobian_sparsity)), func, $escrow)
-            $escrow += 1
-        end
+function variableupperbounds(node::OptiNode)
+    #Get upper bound variable constraints
+    upper_bounds = ones(JuMP.num_variables(node))*Inf #Assume no upper bound by default
+
+    var_bound_constraints = JuMP.all_constraints(node,JuMP.VariableRef,MOI.LessThan{Float64})
+    for var_bound_ref in var_bound_constraints
+        var_constraint = JuMP.constraint_object(var_bound_ref)
+        var = var_constraint.func
+        index = var.index
+        upper_bound = var_constraint.set.upper
+        upper_bounds[index.value] = upper_bound
     end
+    #Get fixed variable constraints
+    var_equal_constraints = JuMP.all_constraints(node,JuMP.VariableRef,MOI.EqualTo{Float64})
+    for var_equal_ref in var_equal_constraints
+        var_constraint = JuMP.constraint_object(var_equal_ref)
+        var = var_constraint.func
+        index = var.index
+        upper_bound = var_constraint.set.value
+        upper_bounds[index.value] = upper_bound
+    end
+
+    #TODO sort?
+    return upper_bounds
 end
 
-function pips_jacobian_structure(d::JuMP.NLPEvaluator)
-    num_nlp_constraints = length(d.m.nlp_data.nlconstr)
-    if num_nlp_constraints > 0
-		MOI.initialize(d,[:Grad,:Jac,:Hess])
-        nlp_jacobian_sparsity = MOI.jacobian_structure(d)
-    else
-        nlp_jacobian_sparsity = []
+function variablelowerbounds(node::OptiNode)
+    lower_bounds = ones(JuMP.num_variables(node))*-Inf #Assume no upper bound by default
+    var_bound_constraints = JuMP.all_constraints(node,JuMP.VariableRef,MOI.GreaterThan{Float64})
+    for var_bound_ref in var_bound_constraints
+        var_constraint = JuMP.constraint_object(var_bound_ref)
+        var = var_constraint.func
+        index = var.index
+        lower_bound = var_constraint.set.lower
+        lower_bounds[index.value] = lower_bound
     end
 
-    jacobian_sparsity = Tuple{Int64,Int64}[]
-    row = 1
-	con_data = get_constraint_data(d.m)
-
-    @append_to_jacobian_sparsity con_data.linear_le_constraints
-    @append_to_jacobian_sparsity con_data.linear_ge_constraints
-	@append_to_jacobian_sparsity con_data.linear_interval_constraints
-    @append_to_jacobian_sparsity con_data.linear_eq_constraints
-    @append_to_jacobian_sparsity con_data.quadratic_le_constraints
-    @append_to_jacobian_sparsity con_data.quadratic_ge_constraints
-	@append_to_jacobian_sparsity con_data.quadratic_interval_constraints
-    @append_to_jacobian_sparsity con_data.quadratic_eq_constraints
-    for (nlp_row, column) in nlp_jacobian_sparsity
-        push!(jacobian_sparsity, (nlp_row + row - 1, column))
+    var_equal_constraints = JuMP.all_constraints(node,JuMP.VariableRef,MOI.EqualTo{Float64})
+    for var_equal_ref in var_equal_constraints
+        var_constraint = JuMP.constraint_object(var_equal_ref)
+        var = var_constraint.func
+        index = var.index
+        lower_bound = var_constraint.set.value
+        lower_bounds[index.value] = lower_bound
     end
-    return jacobian_sparsity
-end
 
-function pips_jacobian_structure(m::JuMP.Model)
-end
-
-#####################
-# HESSIAN STRUCTURE
-#####################
-function has_nl_objective(m::JuMP.Model)
-	if m.nlp_data == nothing
-		return false
-	elseif m.nlp_data.nlobj != nothing
-		return true
-	else
-		return false
-	end
-end
-
-append_to_hessian_sparsity!(hessian_sparsity, ::Union{JuMP.VariableRef,JuMP.GenericAffExpr}) = nothing
-
-function append_to_hessian_sparsity!(hessian_sparsity, quad::JuMP.GenericQuadExpr{Float64,JuMP.VariableRef})
-    for term in keys(quad.terms)
-        push!(hessian_sparsity, (term.a.index.value,term.b.index.value))
-    end
-end
-
-#NOTE: there can be duplicate entries
-function pips_hessian_lagrangian_structure(d::JuMP.NLPEvaluator)
-    hessian_sparsity = Tuple{Int64,Int64}[]
-	m = d.m
-	con_data = get_constraint_data(m)
-	if m.nlp_data == nothing
-	    append_to_hessian_sparsity!(hessian_sparsity, JuMP.objective_function(m))
-	elseif m.nlp_data.nlobj == nothing
-		append_to_hessian_sparsity!(hessian_sparsity, JuMP.objective_function(m))
-	end
-    for constraint in con_data.quadratic_le_constraints
-		quad = constraint.func
-        append_to_hessian_sparsity!(hessian_sparsity, quad)
-    end
-    for constraint in con_data.quadratic_ge_constraints
-		quad = constraint.func
-        append_to_hessian_sparsity!(hessian_sparsity, quad)
-    end
-	for constraint in con_data.quadratic_interval_constraints
-		quad = constraint.func
-		append_to_hessian_sparsity!(hessian_sparsity, quad)
-	end
-    for constraint in con_data.quadratic_eq_constraints
-		quad = constraint.func
-        append_to_hessian_sparsity!(hessian_sparsity, quad)
-    end
-    nlp_hessian_sparsity = MOI.hessian_lagrangian_structure(d)
-    append!(hessian_sparsity, nlp_hessian_sparsity)
-    return hessian_sparsity
+    #TODO sort?
+    return lower_bounds
 end
 
 #####################################
@@ -550,7 +307,7 @@ end
 
 function pips_eval_constraint(d::JuMP.NLPEvaluator, g, x)
     row = 1
-	con_data = d.m.ext[:constraint_data]
+	con_data = getnode(d.m).ext[:constraint_data]
     @eval_function con_data.linear_le_constraints
     @eval_function con_data.linear_ge_constraints
 	@eval_function con_data.linear_interval_constraints
@@ -563,6 +320,124 @@ function pips_eval_constraint(d::JuMP.NLPEvaluator, g, x)
     MOI.eval_constraint(d, nlp_g, x)
     return
 end
+
+#####################
+# JACOBIAN STRUCTURE
+#####################
+function append_to_jacobian_sparsity!(jacobian_sparsity, func::JuMP.GenericAffExpr{Float64,JuMP.VariableRef}, row)
+	aff = func
+    for term in keys(aff.terms)
+        push!(jacobian_sparsity, (row, term.index.value))
+    end
+end
+
+function append_to_jacobian_sparsity!(jacobian_sparsity, func::JuMP.GenericQuadExpr{Float64,JuMP.VariableRef}, row)
+	quad = func
+    for term in keys(quad.aff.terms)
+        push!(jacobian_sparsity, (row, term.index.value))
+    end
+    for term in keys(quad.terms)
+        row_idx = term.a.index
+        col_idx = term.b.index
+        if row_idx == col_idx
+            push!(jacobian_sparsity, (row, row_idx.value))
+        else
+            push!(jacobian_sparsity, (row, row_idx.value))
+            push!(jacobian_sparsity, (row, col_idx.value))
+        end
+    end
+end
+
+macro append_to_jacobian_sparsity(array_name)
+    escrow = esc(:row)
+    quote
+        for constraint in $(esc(array_name))
+			func = constraint.func
+            append_to_jacobian_sparsity!($(esc(:jacobian_sparsity)), func, $escrow)
+            $escrow += 1
+        end
+    end
+end
+
+function pips_jacobian_structure(d::JuMP.NLPEvaluator)
+    num_nlp_constraints = length(d.m.nlp_data.nlconstr)
+    if num_nlp_constraints > 0
+		MOI.initialize(d,[:Grad,:Jac,:Hess])
+        nlp_jacobian_sparsity = MOI.jacobian_structure(d)
+    else
+        nlp_jacobian_sparsity = []
+    end
+
+    jacobian_sparsity = Tuple{Int64,Int64}[]
+    row = 1
+	con_data = get_constraint_data(getnode(d.m))
+
+    @append_to_jacobian_sparsity con_data.linear_le_constraints
+    @append_to_jacobian_sparsity con_data.linear_ge_constraints
+	@append_to_jacobian_sparsity con_data.linear_interval_constraints
+    @append_to_jacobian_sparsity con_data.linear_eq_constraints
+    @append_to_jacobian_sparsity con_data.quadratic_le_constraints
+    @append_to_jacobian_sparsity con_data.quadratic_ge_constraints
+	@append_to_jacobian_sparsity con_data.quadratic_interval_constraints
+    @append_to_jacobian_sparsity con_data.quadratic_eq_constraints
+    for (nlp_row, column) in nlp_jacobian_sparsity
+        push!(jacobian_sparsity, (nlp_row + row - 1, column))
+    end
+    return jacobian_sparsity
+end
+
+#####################
+# HESSIAN STRUCTURE
+#####################
+function has_nl_objective(m::JuMP.Model)
+	if m.nlp_data == nothing
+		return false
+	elseif m.nlp_data.nlobj != nothing
+		return true
+	else
+		return false
+	end
+end
+
+append_to_hessian_sparsity!(hessian_sparsity, ::Union{JuMP.VariableRef,JuMP.GenericAffExpr}) = nothing
+
+function append_to_hessian_sparsity!(hessian_sparsity, quad::JuMP.GenericQuadExpr{Float64,JuMP.VariableRef})
+    for term in keys(quad.terms)
+        push!(hessian_sparsity, (term.a.index.value,term.b.index.value))
+    end
+end
+
+#NOTE: there can be duplicate entries
+function pips_hessian_lagrangian_structure(d::JuMP.NLPEvaluator)
+    hessian_sparsity = Tuple{Int64,Int64}[]
+	m = d.m
+	con_data = get_constraint_data(getnode(m))
+	if m.nlp_data == nothing
+	    append_to_hessian_sparsity!(hessian_sparsity, JuMP.objective_function(m))
+	elseif m.nlp_data.nlobj == nothing
+		append_to_hessian_sparsity!(hessian_sparsity, JuMP.objective_function(m))
+	end
+    for constraint in con_data.quadratic_le_constraints
+		quad = constraint.func
+        append_to_hessian_sparsity!(hessian_sparsity, quad)
+    end
+    for constraint in con_data.quadratic_ge_constraints
+		quad = constraint.func
+        append_to_hessian_sparsity!(hessian_sparsity, quad)
+    end
+	for constraint in con_data.quadratic_interval_constraints
+		quad = constraint.func
+		append_to_hessian_sparsity!(hessian_sparsity, quad)
+	end
+    for constraint in con_data.quadratic_eq_constraints
+		quad = constraint.func
+        append_to_hessian_sparsity!(hessian_sparsity, quad)
+    end
+    nlp_hessian_sparsity = MOI.hessian_lagrangian_structure(d)
+    append!(hessian_sparsity, nlp_hessian_sparsity)
+    return hessian_sparsity
+end
+
 
 #####################################
 # JACOBIAN EVALUATION
@@ -620,7 +495,7 @@ end
 function pips_eval_constraint_jacobian(d::JuMP.NLPEvaluator, jac_values, x)
     offset = 0
 	m = d.m
-	con_data = m.ext[:constraint_data]
+	con_data = getnode(m).ext[:constraint_data]
     @fill_constraint_jacobian con_data.linear_le_constraints
     @fill_constraint_jacobian con_data.linear_ge_constraints
 	@fill_constraint_jacobian con_data.linear_interval_constraints
@@ -660,7 +535,7 @@ end
 function pips_eval_hessian_lagrangian(d::JuMP.NLPEvaluator, hess_values, x, obj_factor, lambda)
     offset = 0
 	m = d.m
-	con_data = m.ext[:constraint_data]
+	con_data = getnode(m).ext[:constraint_data]
 	if !(has_nl_objective(m))
         offset += fill_hessian_lagrangian!(hess_values, 0, obj_factor, JuMP.objective_function(m))
     end

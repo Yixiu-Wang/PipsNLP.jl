@@ -22,7 +22,7 @@ catch
 end
 abstract type ModelInterface end
 #######################
-mutable struct FakeModel <: ModelInterface
+mutable struct PipsModel <: ModelInterface
     sense::Symbol
     status::Int
     nscen::Int
@@ -56,7 +56,7 @@ mutable struct FakeModel <: ModelInterface
     str_write_solution::Function
 
 
-    function FakeModel(sense::Symbol,status::Int,nscen::Int, str_init_x0, str_prob_info, str_eval_f, str_eval_g,str_eval_grad_f,str_eval_jac_g, str_eval_h, str_write_solution)
+    function PipsModel(sense::Symbol,status::Int,nscen::Int, str_init_x0, str_prob_info, str_eval_f, str_eval_g,str_eval_grad_f,str_eval_jac_g, str_eval_h, str_write_solution)
         instance = new(sense,status,nscen,Dict{Int,Int}(),Dict{Int,Int}(),Dict{Int,Int}(),Dict{Int,Int}())
         instance.str_init_x0 = str_init_x0
         instance.str_prob_info = str_prob_info
@@ -107,11 +107,7 @@ mutable struct FakeModel <: ModelInterface
     end
 end
 
-
-
 #######################
-
-
 mutable struct PipsNlpProblemStruct
     ref::Ptr{Nothing}
     model::ModelInterface
@@ -153,7 +149,7 @@ struct CallBackData
     flag::Cint  #this wrapper ignore this flag as it is only for problems without linking constraint
 end
 
-export  ModelInterface, FakeModel,
+export  ModelInterface, PipsModel,
         createProblemStruct, solveProblemStruct
 
 ###########################################################################
