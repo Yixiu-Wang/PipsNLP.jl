@@ -16,7 +16,7 @@ Plasmo = "d3f7391f-f14a-50cc-bbe4-76a32d1bad3c"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 
 [compat]
-Plasmo = "0.3.0"
+Plasmo = "0.3.0,0.4.0"
 julia = "1"
 
 [extras]
