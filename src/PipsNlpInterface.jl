@@ -107,10 +107,9 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
     #TODO: Improve distribute performance.
 
     #IDENTIFY LINK CONSTRAINTS
-    # link_constraints = all_linkconstraints(graph)
     link_connect_eq,link_connect_ineq,linkeqconstraints,linkineqconstraints  = _identify_linkconstraints(graph)
 
-    #NOTE: linkconstraint bounds need to be on every rank.
+
     #FIRST STAGE -> SECOND STAGE LINK CONSTRAINTS
     for link in link_connect_eq
         node = _get_subnode(first_stage,link)::OptiNode
@@ -183,6 +182,7 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
 
     #INEQUALITY CONSTRAINTS
     #Inequality bounds
+    #NOTE: linkconstraint bounds need to be on every rank.
     for (idx,link) in enumerate(linkineqconstraints)
         row = idx
         if isa(link.set,MOI.LessThan)
@@ -719,7 +719,7 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
 
             n = zeros(Int, 1)
             n[1] = local_data.n
-            MPI.Bcast!(n,      length(n),      coreid[1], comm)
+            MPI.Bcast!(n,length(n),coreid[1], comm)
 
             if rank != coreid[1]
                 local_data.n = n[1]
@@ -737,7 +737,7 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
         #TODO: Load results into a graph backend with termination status etc...
     end
 
-    #TODO: Better return status.  Return MOI status
+    #TODO: Better return status.  Hook up a simple MOI interface that drops the model results into a graph backend CachingOptimizer
     status = :Unknown
     if ret == 0
         status = :Optimal
@@ -755,5 +755,6 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
 
     return status
 end  #end pips_nlp_solve
+
 
 end #end module
