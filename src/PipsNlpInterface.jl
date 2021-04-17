@@ -240,7 +240,7 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
 
         nothing_values = isa.(jump_initval,Nothing)
         float_values = .!(nothing_values)
-        local_initval[nothing_values] .= 1  #set to 1 by default
+        local_initval[nothing_values] .= 0  #set to 1 by default
         local_initval[float_values] .= jump_initval[float_values]
         original_copy(local_initval,x0)
     end
@@ -730,7 +730,11 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
         #node.ext[:colVal] = local_data.x_sol
         vars = MOI.get(node,MOI.ListOfVariableIndices())
         primals = OrderedDict(zip(vars,local_data.x_sol))
-        Plasmo._set_primals(JuMP.backend(node),primals)
+
+        id = graph.id
+        src = JuMP.backend(node)
+        src.primals[id] = primals
+        src.last_solution_id = id
 
         #TODO set duals
 
