@@ -64,12 +64,11 @@ end
     #Link constraints between subnodes
     @linkconstraint(graph,n2[:x] == n3[:x])
     @linkconstraint(graph,n3[:x] == n4[:x])
-
 end
 
 #Solve with PIPS-NLP
 @mpi_do manager begin
-    using PipsSolver
+    using PipsNLP
     pipsnlp_solve(graph)
 end
 

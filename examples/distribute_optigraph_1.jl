@@ -1,9 +1,7 @@
-#NOTE: distribute does not work yet on this version
-
 using MPIClusterManagers # to import MPIManager
 using Distributed #provides addprocs()
 
-graph = ModelGraph()
+graph = OptiGraph()
 
 n1 = @optinode(graph)
 n2 = @optinode(graph)
@@ -29,12 +27,12 @@ addprocs(manager)
 @everywhere using Pkg
 @everywhere Pkg.activate((@__DIR__)*"/..")
 @everywhere using Plasmo
-@everywhere using PipsSolver
+@everywhere using PipsNLP
 
 
 #Distribute the graph to workers
 julia_workers = collect(values(manager.mpi2j))
-remote_references = PipsSolver.distribute(graph,julia_workers,remote_name = :pipsgraph)
+remote_references = PipsNLP.distribute_optigraph(graph,julia_workers,remote_name = :pipsgraph)
 
 # The remote optigraphs can be queried if they are fetched from the other workers
 # r1 = fetch(remote_references[1])

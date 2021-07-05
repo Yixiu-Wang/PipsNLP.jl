@@ -1,13 +1,12 @@
-module PipsSolver
+module PipsNLP
 
-using Plasmo
-using JuMP
+using JuMP, Plasmo
 using Libdl
 using MPI
 using Distributed
 using DataStructures
 
-export pipsnlp_solve, distribute
+export pipsnlp_solve, distribute_optigraph
 
 include("PipsNlpInterface.jl")
 

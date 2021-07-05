@@ -3,7 +3,7 @@ Pkg.activate((@__DIR__)*"/..")
 
 using Plasmo
 using MPI
-using PipsSolver
+using PipsNLP
 
 MPI.Init()
 comm = MPI.COMM_WORLD
@@ -65,6 +65,6 @@ if rank == 0
     println("Solving with PIPS-NLP")
 end
 
-pipsnlp_solve(graph)
+PipsNLP.pipsnlp_solve(graph)
 
 MPI.Finalize()
