@@ -521,6 +521,19 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
         println("PIPS-NLP time:   ",  time() - t1, " (s)")
     end
 
+    status_dict = Dict(
+    0 => MOI.LOCALLY_SOLVED,        #:Optimal
+    1 => MOI.OTHER_LIMIT,           #:Not_Finished
+    2 => MOI.ITERATION_LIMIT,       #:Iteration_Limit
+    3 => MOI.LOCALLY_INFEASIBLE,    #:Infeasible_Problem_Detected
+    4 => MOI.NUMERICAL_ERROR)       #:Restoration_needed
+
+    if ret in keys(status_dict)
+        status = status_dict[ret]
+    else
+        status = MOI.OTHER_ERROR
+    end
+
     #set solution
     for (idx,node) in enumerate(model_list)  #set solution values for each model
         local_data = _get_pips_data(node)
@@ -544,39 +557,16 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
             end
             MPI.Bcast!(local_data.x_sol, local_data.n, coreid[1], comm)
         end
-        #node.ext[:colVal] = local_data.x_sol
-        #vars = MOI.get(node,MOI.ListOfVariableIndices())
+
         vars = Plasmo.all_variables(node)
         vals = local_data.x_sol
-        # primals = OrderedDict(zip(vars,local_data.x_sol))
         Plasmo.set_node_primals(node,vars,vals)
-        #use API function
-        # id = graph.id
-        # src = JuMP.backend(node)
-        # src.primals[id] = primals
-        # src.last_solution_id = id
+        Plasmo.set_node_status(node,status)
 
         #TODO set duals
 
-        #TODO: Load results into a graph backend with termination status etc...
+        #TODO: Load results into a graph backend
     end
-
-    #TODO: Better return status.  Hook up a simple MOI interface that drops the model results into a graph backend CachingOptimizer
-    status = :Unknown
-    if ret == 0
-        status = :Optimal
-    elseif ret == 1
-        status = :Not_Finished
-    elseif	ret == 2
-        status = :Maximum_Iterations_Exceeded
-    elseif	ret == 3
-        status = :Infeasible_Problem_Detected
-    elseif ret == 4
-        status = :Restoration_needed
-    else
-        status = :UnknownStatus
-    end
-
     return status
 end  #end pips_nlp_solve
 

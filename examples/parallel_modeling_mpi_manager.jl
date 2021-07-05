@@ -2,15 +2,16 @@
 using MPIClusterManagers
 using Distributed
 
-manager = MPIManager(np = 2)
+manager = MPIManager(np = 3)
 addprocs(manager)
 
 @mpi_do manager begin
     #Run mpi on workers
     using Pkg
-    Pkg.activate("./")
+    Pkg.activate("../")
     using Plasmo
     using MPI
+    using PipsNLP
     comm=MPI.COMM_WORLD
     rank = MPI.Comm_rank(comm)
 
@@ -68,7 +69,6 @@ end
 
 #Solve with PIPS-NLP
 @mpi_do manager begin
-    using PipsNLP
     pipsnlp_solve(graph)
 end
 

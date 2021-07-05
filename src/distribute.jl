@@ -17,14 +17,10 @@ function distribute_optigraph(graph::OptiGraph,to_workers::Vector{Int64};remote_
     nodes_per_worker = Int64(floor(n_nodes/n_workers))
     nodes = all_nodes(graph)
     node_indices = [getindex(graph,node) for node in nodes]
-
     user_pips_data = _setup_pips_nlp_data!(graph)
 
     #broadcast global data to each worker
     @everywhere  Core.eval(Main, Expr(:(=), pips_nlp_data, user_pips_data))
-
-    #pips_nlp_solve checks for this key to use
-    #graph.ext[:user_pips_data] = user_pips_data
 
     #Allocate optinodes onto workers.  Split it up evenly
     allocations = []
@@ -56,11 +52,7 @@ function distribute_optigraph(graph::OptiGraph,to_workers::Vector{Int64};remote_
             ref2 = @spawnat worker Core.eval(Main, Expr(:(=), remote_name, PipsNLP._create_worker_optigraph(getfield(Main,:nodes),
             node_indices[i],
             getfield(Main,:pips_nlp_data),
-            n_nodes,
-            n_linkeq_cons,
-            n_linkineq_cons,
-            ineqlink_lb,
-            ineqlink_ub)))
+            n_nodes)))
             push!(remote_references,ref2)
         end
     end
@@ -77,50 +69,18 @@ function _create_worker_optigraph(optinodes::Vector{OptiNode},
     graph.ext[:user_pips_data] = user_pips_data
 
     #Add nodes to worker's graph.  Each worker should have the same number of nodes, but some will be empty.
-    #TODO: optigraph_reference?
     for i = 1:n_nodes
         add_node!(graph)
     end
     for (i,index) in enumerate(node_indices)
         graph.optinodes[index] = optinodes[i]
     end
-
-    #Setup user PipsNLP data.
-    user_pips_data = _setup_pips_nlp_data!()
-    graph.ext[:user_pips_data] = user_pips_data
-
-    #Populate models for given nodes
-    # for (i,node) in enumerate(optinodes)
-    #     index = node_indices[i]  #need node index in highest level
-    #     new_node = getnode(graph,index)
-    #     set_model(new_node,getmodel(node))
-    # end
-    # We need the graph to have the partial constraints over graph nodes
-    # Add link constraints
-    # graph.linkeqconstraints = _add_linkeq_terms(modelnodes)
-    # graph.linkineqconstraints = _add_linkineq_terms(modelnodes)
-
-    #Use node link-constraint information to setup pipsnlp data
-
-    #Setup new graph linkconstraints
-    # linkeqconstraints = _add_linkeq_terms(optinodes)
-    # linkineqconstraints = _add_linkineq_terms(optinodes)
-
-    #Need to match both equality and inequality
-    #Add linkconstraints, then fix indices
-    # for (idx,link) in linkeqconstraints
-    #     cref = Plasmo.add_link_equality_constraint(graph,JuMP.ScalarConstraint(link.func,link.set);eq_idx = idx)
-    # end
-    #
-    # for (idx,link) in linkineqconstraints
-    #     cref = Plasmo.add_link_inequality_constraint(graph,JuMP.ScalarConstraint(link.func,link.set);ineq_idx = idx)
-    # end
-
-
-
     return graph
 end
 
+
+#pips_nlp_solve checks for this key to use
+#graph.ext[:user_pips_data] = user_pips_data
 
 # function _add_linkeq_terms(modelnodes::Vector{OptiNode})
 #     linkeqconstraints = OrderedDict()

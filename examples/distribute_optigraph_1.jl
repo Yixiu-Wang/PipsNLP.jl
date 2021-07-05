@@ -1,6 +1,15 @@
 using MPIClusterManagers # to import MPIManager
 using Distributed #provides addprocs()
 
+manager=MPIManager(np=2)
+addprocs(manager)
+
+#Setup worker environments
+@everywhere using Pkg
+@everywhere Pkg.activate((@__DIR__)*"/..")
+@everywhere using Plasmo
+@everywhere using PipsNLP
+
 graph = OptiGraph()
 
 n1 = @optinode(graph)
@@ -20,14 +29,7 @@ n2 = @optinode(graph)
 
 @linkconstraint(graph,n1[:x] == n2[:x])
 
-manager=MPIManager(np=2)
-addprocs(manager)
 
-#Setup worker environments
-@everywhere using Pkg
-@everywhere Pkg.activate((@__DIR__)*"/..")
-@everywhere using Plasmo
-@everywhere using PipsNLP
 
 
 #Distribute the graph to workers
