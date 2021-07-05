@@ -2,7 +2,7 @@
 using MPIClusterManagers
 using Distributed
 
-manager = MPIManager(np = 3)
+manager = MPIManager(np = 2)
 addprocs(manager)
 
 @mpi_do manager begin

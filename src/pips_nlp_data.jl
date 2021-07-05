@@ -47,12 +47,12 @@ PIPSNLPData() = PIPSNLPData(nothing,0,0,0,0,0,Int[],Int[], Float64[], Int[], Int
 #data that each worker needs
 mutable struct PipsNLPWorkerData
 	first_stage::OptiNode
-    n_linkeq_cons
-    n_linkineq_cons
-    link_ineq_lower
-    link_ineq_upper
-    link_eq_lower
-    link_eq_upper
+    n_linkeq_cons::Int64
+    n_linkineq_cons::Int64
+    link_ineq_lower::Vector{Float64}
+    link_ineq_upper::Vector{Float64}
+    link_eq_lower::Vector{Float64}
+    link_eq_upper::Vector{Float64}
 end
 
 function _get_pips_data(node::OptiNode)
@@ -211,14 +211,14 @@ function _setup_pips_nlp_data!(graph::OptiGraph)
 		end
 	end
 
-    worker_data = PipsNLPWorkerData()
-	worker_data.first_stage = first_stage
-    worker_data.n_linkeq_cons = nlinkeq
-    worker_data.n_linkineq_cons = nlinkineq
-    worker_data.link_ineq_lower = ineqlink_lb
-    worker_data.link_ineq_upper = ineqlink_ub
-    worker_data.link_eq_lower = eqlink_lb
-    worker_data.link_eq_upper = eqlink_ub
+    worker_data = PipsNLPWorkerData(
+    first_stage,
+    nlinkeq,
+    nlinkineq,
+    ineqlink_lb,
+    ineqlink_ub,
+    eqlink_lb,
+    eqlink_ub)
 
 	return worker_data
 end
@@ -240,6 +240,7 @@ function _identify_linkconstraints(graph::OptiGraph)
 			end
 		end
 	else
+        first_stage_nodes = getnodes(graph)
 	    sub_nodes = setdiff(all_nodes(graph),first_stage_nodes)
 	    for link in all_linkconstraints(graph)
 	        link_constraint = constraint_object(link)

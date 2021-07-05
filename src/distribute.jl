@@ -11,8 +11,6 @@ function distribute_optigraph(graph::OptiGraph,to_workers::Vector{Int64};remote_
     #NOTE: Does not yet support subgraphs.  Need to aggregate first
 
     #IDEA: Create a channel from the master process to each worker?
-    # channel_nodes = RemoteChannel(1)    #we will allocate and send nodes to workers
-    # channel_indices = RemoteChannel(1)
     to_workers = sort(to_workers)
     n_nodes = num_nodes(graph)
     n_workers = length(to_workers)
@@ -22,49 +20,11 @@ function distribute_optigraph(graph::OptiGraph,to_workers::Vector{Int64};remote_
 
     user_pips_data = _setup_pips_nlp_data!(graph)
 
-    #broadcast this to each worker
-    @everywhere  Core.eval(Main, Expr(:(=), pips_nlp_data,user_pips_data))
+    #broadcast global data to each worker
+    @everywhere  Core.eval(Main, Expr(:(=), pips_nlp_data, user_pips_data))
 
     #pips_nlp_solve checks for this key to use
-    graph.ext[:user_pips_data] = user_pips_data
-
-
-
-
-    #link_connect_eq,link_connect_ineq,linkeqconstraints,linkineqconstraints  = _identify_linkconstraints(graph)
-
-    #setup the data for each node here.  Then send them off to workers
-
-
-    # linkeqconstraints = OrderedDict()
-    # linkineqconstraints = OrderedDict()
-    # for edge in getedges(mg)
-    #     for (idx,link) in edge.linkeqconstraints
-    #         linkeqconstraints[idx] = link
-    #     end
-    #     for (idx,link) in edge.linkineqconstraints
-    #         linkineqconstraints[idx] = link
-    #     end
-    # end
-
-    # n_linkeq_cons =  length(linkeqconstraints)
-    # n_linkineq_cons = length(linkineqconstraints)
-    #
-    # ineqlink_lb = zeros(n_linkineq_cons)
-    # ineqlink_ub = zeros(n_linkineq_cons)
-    #
-    # for (idx,link) in linkineqconstraints
-    #     if isa(link.set,MOI.LessThan)
-    #         ineqlink_lb[idx] = -Inf
-    #         ineqlink_ub[idx] = link.set.upper
-    #     elseif isa(link.set,MOI.GreaterThan)
-    #         ineqlink_lb[idx] = link.set.lower
-    #         ineqlink_ub[idx] = Inf
-    #     elseif isa(link.set,MOI.Interval)
-    #         ineqlink_lb[idx] = link.set.lower
-    #         ineqlink_ub[idx] = link.set.upper
-    #     end
-    # end
+    #graph.ext[:user_pips_data] = user_pips_data
 
     #Allocate optinodes onto workers.  Split it up evenly
     allocations = []
@@ -93,9 +53,9 @@ function distribute_optigraph(graph::OptiGraph,to_workers::Vector{Int64};remote_
                 Core.eval(Main, Expr(:(=), :nodes, take!(channel)))
             end
             wait(ref1)
-            ref2 = @spawnat worker Core.eval(Main, Expr(:(=), remote_name,
-            PipsNLP._create_worker_optigraph(getfield(Main,:nodes),
+            ref2 = @spawnat worker Core.eval(Main, Expr(:(=), remote_name, PipsNLP._create_worker_optigraph(getfield(Main,:nodes),
             node_indices[i],
+            getfield(Main,:pips_nlp_data),
             n_nodes,
             n_linkeq_cons,
             n_linkineq_cons,
@@ -109,14 +69,12 @@ end
 
 function _create_worker_optigraph(optinodes::Vector{OptiNode},
     node_indices::Vector{Int64},
-    n_nodes::Int64,
-    n_linkeq_cons::Int64,
-    n_linkineq_cons::Int64,
-    link_ineq_lower::Vector,
-    link_ineq_upper::Vector)
+    user_pips_data,
+    n_nodes)
 
     graph = OptiGraph()
     graph.node_idx_map = Dict{OptiNode,Int64}()
+    graph.ext[:user_pips_data] = user_pips_data
 
     #Add nodes to worker's graph.  Each worker should have the same number of nodes, but some will be empty.
     #TODO: optigraph_reference?
@@ -145,18 +103,18 @@ function _create_worker_optigraph(optinodes::Vector{OptiNode},
     #Use node link-constraint information to setup pipsnlp data
 
     #Setup new graph linkconstraints
-    linkeqconstraints = _add_linkeq_terms(optinodes)
-    linkineqconstraints = _add_linkineq_terms(optinodes)
+    # linkeqconstraints = _add_linkeq_terms(optinodes)
+    # linkineqconstraints = _add_linkineq_terms(optinodes)
 
     #Need to match both equality and inequality
     #Add linkconstraints, then fix indices
-    for (idx,link) in linkeqconstraints
-        cref = Plasmo.add_link_equality_constraint(graph,JuMP.ScalarConstraint(link.func,link.set);eq_idx = idx)
-    end
-
-    for (idx,link) in linkineqconstraints
-        cref = Plasmo.add_link_inequality_constraint(graph,JuMP.ScalarConstraint(link.func,link.set);ineq_idx = idx)
-    end
+    # for (idx,link) in linkeqconstraints
+    #     cref = Plasmo.add_link_equality_constraint(graph,JuMP.ScalarConstraint(link.func,link.set);eq_idx = idx)
+    # end
+    #
+    # for (idx,link) in linkineqconstraints
+    #     cref = Plasmo.add_link_inequality_constraint(graph,JuMP.ScalarConstraint(link.func,link.set);ineq_idx = idx)
+    # end
 
 
 
@@ -231,4 +189,42 @@ end
 
 #Core.eval(Main, Expr(:(=), :node_indices, take!(channel_indices)))
 #@spawnat(1, put!(channel_indices, node_indices[i]))
-_
+
+
+
+
+
+    #link_connect_eq,link_connect_ineq,linkeqconstraints,linkineqconstraints  = _identify_linkconstraints(graph)
+
+    #setup the data for each node here.  Then send them off to workers
+
+
+    # linkeqconstraints = OrderedDict()
+    # linkineqconstraints = OrderedDict()
+    # for edge in getedges(mg)
+    #     for (idx,link) in edge.linkeqconstraints
+    #         linkeqconstraints[idx] = link
+    #     end
+    #     for (idx,link) in edge.linkineqconstraints
+    #         linkineqconstraints[idx] = link
+    #     end
+    # end
+
+    # n_linkeq_cons =  length(linkeqconstraints)
+    # n_linkineq_cons = length(linkineqconstraints)
+    #
+    # ineqlink_lb = zeros(n_linkineq_cons)
+    # ineqlink_ub = zeros(n_linkineq_cons)
+    #
+    # for (idx,link) in linkineqconstraints
+    #     if isa(link.set,MOI.LessThan)
+    #         ineqlink_lb[idx] = -Inf
+    #         ineqlink_ub[idx] = link.set.upper
+    #     elseif isa(link.set,MOI.GreaterThan)
+    #         ineqlink_lb[idx] = link.set.lower
+    #         ineqlink_ub[idx] = Inf
+    #     elseif isa(link.set,MOI.Interval)
+    #         ineqlink_lb[idx] = link.set.lower
+    #         ineqlink_ub[idx] = link.set.upper
+    #     end
+    # end

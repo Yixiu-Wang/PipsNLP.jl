@@ -60,11 +60,6 @@ end
 
 #create a link constraint between the subproblems (PIPS-NLP supports this kind of constraint)
 @linkconstraint(graph, (1/Ns)*sum(getnode(subgraph,s)[:p] for s in owned) == 8)
-
-if rank == 0
-    println("Solving with PIPS-NLP")
-end
-
 PipsNLP.pipsnlp_solve(graph)
 
 MPI.Finalize()
