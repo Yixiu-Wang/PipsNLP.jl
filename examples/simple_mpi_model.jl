@@ -6,11 +6,15 @@ using MPI
 using PipsNLP
 
 MPI.Init()
+
 comm = MPI.COMM_WORLD
 ncores = MPI.Comm_size(comm)
 rank = MPI.Comm_rank(comm)
 
+#8 scenarios
 Ns = 8
+
+#scenario per processor (SPP)
 SPP = round(Int, floor(Ns/ncores))
 
 function create_simple_model(d)
@@ -31,15 +35,12 @@ first_stage = @optinode(graph)
 @variable(first_stage,0 <= x <= 8)
 @objective(first_stage,Min,x)
 
-#Add the master model to the graph
-# master_node = add_node!(graph,master)
-# scenm=Array{JuMP.Model}(undef,Ns)
-#scen_nodes = Array{ModelNode}(undef,Ns)
 owned = []
 s = 1
+
+#subgraph contains the scenarios
 subgraph = OptiGraph()
 add_subgraph!(graph,subgraph)
-#split scenarios between processors
 for j in 1:Ns
     global s
     if round(Int, floor((s-1)/SPP)) == rank
@@ -52,7 +53,7 @@ for j in 1:Ns
 
         #reconstruct second stage objective
         @objective(node,Min,1/Ns*(node[:p] + 3*node[:u]))
-    else #Ghost nodes
+    else # create a ghost node (empty model)
         node = add_node!(subgraph)
     end
     s = s + 1

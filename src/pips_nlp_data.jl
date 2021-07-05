@@ -74,7 +74,7 @@ function _setup_pips_nlp_data!(graph::OptiGraph)
     model_list = [first_stage;submodels]
 	for (idx,node) in enumerate(model_list)
 		node.ext[:pips_data] = PIPSNLPData()
-		constraint_data = get_constraint_data(node)
+		constraint_data = PipsNLP.PipsNlpInterface.get_constraint_data(node)
 		node.ext[:constraint_data] = constraint_data
 	end
 

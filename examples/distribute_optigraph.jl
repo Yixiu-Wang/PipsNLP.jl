@@ -10,16 +10,17 @@ addprocs(manager)
 @everywhere using Plasmo
 @everywhere using PipsNLP
 
+
 graph = OptiGraph()
 
 n1 = @optinode(graph)
 n2 = @optinode(graph)
 
-@variable(n1,0 <= x <= 2)
-@variable(n1,0 <= y <= 3)
+@variable(n1, 0 <= x <= 2)
+@variable(n1, 0 <= y <= 3)
 @variable(n1, z >= 0)
-@constraint(n1,x+y+z >= 4)
-@objective(n1,Min,y)
+@constraint(n1, x+y+z >= 4)
+@objective(n1, Min, y)
 
 @variable(n2,x)
 @NLconstraint(n2,ref,exp(x) >= 2)
@@ -29,23 +30,20 @@ n2 = @optinode(graph)
 
 @linkconstraint(graph,n1[:x] == n2[:x])
 
-
-
-
-#Distribute the graph to workers
+#distribute the graph to workers
 julia_workers = collect(values(manager.mpi2j))
 remote_references = PipsNLP.distribute_optigraph(graph,julia_workers,remote_name = :pipsgraph)
 
 # The remote optigraphs can be queried if they are fetched from the other workers
+# NOTE: this will copy the optigraph to the main process
 # r1 = fetch(remote_references[1])
 # r2 = fetch(remote_references[2])
 
 #Solve with pips-nlp
 @mpi_do manager begin
     using MPI
-    PipsSolver.pipsnlp_solve(pipsgraph)
+    PipsNLP.pipsnlp_solve(pipsgraph)
 end
 
-
-rank_zero = manager.mpi2j[0] #julia process representing rank 0
-solution = fetch(@spawnat(rank_zero, pipsgraph))
+#fill the local solution with the result on worker 2 (worker 2 is the root MPI rank)
+PipsNLP.fill_solution!(graph,:pipsgraph,2)

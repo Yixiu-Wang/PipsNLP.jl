@@ -5,6 +5,7 @@ module PipsNlpInterface
 using SparseArrays
 using LinearAlgebra
 using DataStructures
+using PipsNLP
 import MPI
 
 import JuMP
@@ -12,11 +13,10 @@ import MathOptInterface
 const MOI = MathOptInterface
 using Plasmo
 
-include("PipsNlpCInterface.jl")
+include("pipsnlp_c_interface.jl")
 using .PipsNlpSolver
 
 include("pips_utils.jl")
-include("pips_nlp_data.jl")
 include("nlp_evaluator.jl")
 
 export pipsnlp_solve
@@ -36,16 +36,16 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
     if haskey(graph.ext,:user_pips_data)
         worker_data = graph.ext[:user_pips_data]
     else
-        worker_data = _setup_pips_nlp_data!(graph)
+        worker_data = PipsNLP._setup_pips_nlp_data!(graph)
     end
 
     first_stage = worker_data.first_stage
     submodels = setdiff(all_nodes(graph),[first_stage])
-
     n_sub_models = length(submodels)
     model_list = [first_stage; submodels]
 
-    first_stage_data = _get_pips_data(first_stage)
+    #unpack data
+    first_stage_data = PipsNLP._get_pips_data(first_stage)
     nlinkeq = worker_data.n_linkeq_cons
     nlinkineq = worker_data.n_linkineq_cons
     ineqlink_lb = worker_data.link_ineq_lower
@@ -70,7 +70,7 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
     function str_prob_info(nodeid,flag,mode,col_lb,col_ub,row_lb,row_ub)
         if flag != 1
             node = model_list[nodeid+1]
-            local_data = _get_pips_data(node)
+            local_data = PipsNLP._get_pips_data(node)
             #do a warm start on the node
             if !(local_data.loaded)
                 local_data.loaded = true
@@ -215,8 +215,8 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
     #x0 is first stage variable values, x1 is local values
     function str_eval_f(nodeid,x0,x1)
     	node = model_list[nodeid+1] #Julia doesn't start index at 0
-        local_data = _get_pips_data(node)
-        local_d = _get_pips_data(node).d
+        local_data = PipsNLP._get_pips_data(node)
+        local_d = PipsNLP._get_pips_data(node).d
         if nodeid ==  0
             local_x = x0
         else
@@ -231,8 +231,8 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
     #evaluate constraints
     function str_eval_g(nodeid,x0,x1,new_eq_g, new_inq_g)
         node = model_list[nodeid+1]
-        local_data = _get_pips_data(node)
-        local_d = _get_pips_data(node).d
+        local_data = PipsNLP._get_pips_data(node)
+        local_d = PipsNLP._get_pips_data(node).d
         if nodeid ==  0
             local_x = x0
         else
@@ -250,7 +250,7 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
     #get solution
     function str_write_solution(id::Integer, x::Vector{Float64}, y_eq::Vector{Float64}, y_ieq::Vector{Float64})
         node = model_list[id+1]
-        local_data = _get_pips_data(node)
+        local_data = PipsNLP._get_pips_data(node)
         local_data.x_sol = copy(x)
 
         #TODO: Grab dual values
@@ -262,8 +262,8 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
     function str_eval_grad_f(rowid,colid,x0,x1,new_grad_f)
         node = model_list[rowid+1]
         if rowid == colid
-            local_data = _get_pips_data(node)
-            local_d = _get_pips_data(node).d
+            local_data = PipsNLP._get_pips_data(node)
+            local_d = PipsNLP._get_pips_data(node).d
             if colid ==  0
                 local_x = x0
             else
@@ -305,7 +305,7 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
     function str_eval_jac_g(rowid,colid,flag, x0,x1,mode,e_rowidx,e_colptr,e_values,i_rowidx,i_colptr,i_values)
         if flag != 1 #populate parent child structure
             node = model_list[rowid+1]
-            local_data = _get_pips_data(node)
+            local_data = PipsNLP._get_pips_data(node)
             local_m_eq = length(local_data.eq_idx)
             local_m_ineq = length(local_data.ineq_idx)
             if mode == :Structure
@@ -360,7 +360,7 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
             end
         else #populate linkconstraint structure
             node = model_list[rowid+1]
-            local_data = _get_pips_data(node)
+            local_data = PipsNLP._get_pips_data(node)
             linkIeq = local_data.linkIeq
             linkJeq = local_data.linkJeq
             linkVeq = local_data.linkVeq
@@ -391,7 +391,7 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
     #evaluate hessian
     function str_eval_h(rowid,colid,x0,x1,obj_factor,lambda,mode,rowidx,colptr,values)
         node = model_list[colid+1]
-        local_data = _get_pips_data(node)
+        local_data = PipsNLP._get_pips_data(node)
         if mode == :Structure
             if rowid == colid
                 node_Hrows  = node.ext[:Hrows]
@@ -536,7 +536,7 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
 
     #set solution
     for (idx,node) in enumerate(model_list)  #set solution values for each model
-        local_data = _get_pips_data(node)
+        local_data = PipsNLP._get_pips_data(node)
         if idx != 1 #all cores have the first stage
             coreid = zeros(Int, 1)
             sc = MPI.Reduce(local_data.coreid, MPI.SUM, root, comm)
@@ -562,11 +562,14 @@ function pipsnlp_solve(graph::OptiGraph) #Assume graph variables and constraints
         vals = local_data.x_sol
         Plasmo.set_node_primals(node,vars,vals)
         Plasmo.set_node_status(node,status)
-
-        #TODO set duals
-
-        #TODO: Load results into a graph backend
+        #TODO: set duals
+        #TODO: load results into a graph backend optimizer
     end
+
+    if rank == 0
+        println(status)
+    end
+
     return status
 end  #end pips_nlp_solve
 
