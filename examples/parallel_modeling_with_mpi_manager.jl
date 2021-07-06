@@ -8,9 +8,10 @@ addprocs(manager)
 @mpi_do manager begin
     #Run mpi on workers
     using Pkg
-    Pkg.activate("./")
+    Pkg.activate("../")
     using Plasmo
     using MPI
+    using PipsNLP
     comm=MPI.COMM_WORLD
     rank = MPI.Comm_rank(comm)
 
@@ -64,12 +65,10 @@ end
     #Link constraints between subnodes
     @linkconstraint(graph,n2[:x] == n3[:x])
     @linkconstraint(graph,n3[:x] == n4[:x])
-
 end
 
 #Solve with PIPS-NLP
 @mpi_do manager begin
-    using PipsSolver
     pipsnlp_solve(graph)
 end
 

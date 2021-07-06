@@ -1,14 +1,14 @@
 #############################################
 # Helpers
 #############################################
-function exchange(a,b)
+function _exchange(a,b)
 	 temp = a
          a=b
          b=temp
 	 return (a,b)
 end
 
-function sparseKeepZero(I::AbstractVector{Ti},
+function _sparse_keep_zero(I::AbstractVector{Ti},
     J::AbstractVector{Ti},
     V::AbstractVector{Tv},
     nrow::Integer, ncol::Integer) where {Tv,Ti<:Integer}
@@ -114,13 +114,6 @@ function sparseKeepZero(I::AbstractVector{Ti},
     return SparseMatrixCSC(nrow, ncol, RpT, RiT, RxT)
 end
 
-#Convert Julia indices to C indices
-function convert_to_c_idx(indicies)
-    for i in 1:length(indicies)
-        indicies[i] = indicies[i] - 1
-    end
-end
-
 #Grab the subnode in hierarchical linkconstraint link
 function _get_subnode(first_stage,link)
 	linked_nodes = getnodes(link)
@@ -129,37 +122,9 @@ function _get_subnode(first_stage,link)
 	return sub_node
 end
 
-#categorize link constraints into hierarchical and distributed
-function _identify_linkconstraints(graph::OptiGraph)
-    links_connect_eq = LinkConstraint[]
-    links_connect_ineq = LinkConstraint[]
-    links_eq = LinkConstraint[]
-    links_ineq = LinkConstraint[]
-
-    first_stage_nodes = getnodes(graph)
-
-    sub_nodes = setdiff(all_nodes(graph),first_stage_nodes)
-
-    for link in all_linkconstraints(graph)
-        link_constraint = constraint_object(link)
-        link_nodes = getnodes(link_constraint)
-
-        #if first_stage_node in link_nodes
-		if isempty(setdiff(first_stage_nodes,link_nodes))
-            @assert length(link_nodes) == 2
-            if isa(link_constraint.set,MOI.EqualTo)
-                push!(links_connect_eq,link_constraint)
-            else
-                push!(links_connect_ineq,link_constraint)
-            end
-        else
-            if isa(link_constraint.set,MOI.EqualTo)
-                push!(links_eq,link_constraint)
-            else
-                push!(links_ineq,link_constraint)
-            end
-        end
-    end
-
-    return links_connect_eq,links_connect_ineq,links_eq,links_ineq
-end
+#Convert Julia indices to C indices
+# function _convert_to_c_idx(indicies)
+#     for i in 1:length(indicies)
+#         indicies[i] = indicies[i] - 1
+#     end
+# end

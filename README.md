@@ -1,75 +1,89 @@
-# PipsSolver.jl
-
+# PipsNLP.jl
 
 ## Overview
-PipsSolver.jl is a Julia interface to the [PIPS-NLP](https://github.com/Argonne-National-Laboratory/PIPS/tree/master/PIPS-NLP) nonlinear optimization solver.
-Running the solver requires a working PIPS-NLP installation following the [instructions](https://github.com/Argonne-National-Laboratory/PIPS).  
-The PipsSolver.jl package works with the graph-based algebraic modeling package [Plasmo.jl](https://github.com/zavalab/Plasmo.jl).
+PipsNLP.jl is a Julia interface to the [PIPS-NLP](https://github.com/Argonne-National-Laboratory/PIPS/tree/master/PIPS-NLP) nonlinear optimization solver.
+Running the solver requires a working PIPS-NLP installation following the [instructions](https://github.com/Argonne-National-Laboratory/PIPS).   
 
-## Installation
-PipsSolver.jl can be installed using the following Julia Pkg command. Note that currently, PipsSolver.jl only works with Plasmo.jl v0.3.0.
+At some point, PIPS-NLP updated which broke support for linking constraints.  If you wish to model with linking constraints, try checking out the following commit hash from the
+PIPS-NLP repo and compiling: `62f664237447c7ce05a62552952c86003d90e68f`
+
+Also note that you will need to compile PIPS-NLP with the same version of MPI used for your Julia environment.
+
+## Julia Interface Installation
+PipsNLP.jl can be installed using the following Julia Pkg command.
 
 ```julia
 using Pkg
-Pkg.add(Pkg.PackageSpec(name="Plasmo", version="0.3.0"))
-Pkg.add(PackageSpec(url="https://github.com/zavalab/PipsSolver.jl.git"))
+Pkg.add(PackageSpec(url="https://github.com/zavalab/PipsNLP.jl.git"))
+```
+or simply:
+```julia
+pkg> add https://github.com/zavalab/PipsNLP.jl.git
 ```
 
 ## Useage
+The PipsNLP.jl package works with [Plasmo.jl](https://github.com/zavalab/Plasmo.jl) to model and solve optimization problems in parallel.
+
+Currently, PipsNLP.jl supports three main modes for modeling.  These are:
+- 1) Model in parallel and execute with mpirun
+- 2) Model in parallel using Julia's mpimanager where mpiranks correspond to Julia workers
+- 3) Model in serial and then distribute to julia workers and solve with MPI.  
+
+The [examples](https://github.com/zavalab/PipsNLP.jl/tree/master/examples) folder has examples for each of these modeling approaches.  While the first approach is probably the most familiar
+to MPI users, the second two approaches make it possible to interact with the PipsNLP model (e.g. to perform multiple solves in a Julia session).  
+
+The following snippet shows how one might model using this third approach to distribute an optigraph and execute PIPS-NLP.
+
 ```julia
 using MPIClusterManagers # to import MPIManager
-using Distributed   # need to also import Distributed to use addprocs()
+using Distributed        # need to also import Distributed to use addprocs()
 
-#Setup worker environments
-#This will load the environment specified in this script's directory onto each worker
+#setup worker environments
 @everywhere using Pkg
-@everywhere Pkg.activate((@__DIR__))
-
-#Load Plasmo and PipsSolver on every worker
+@everywhere Pkg.activate((@__DIR__)) #change this to hit the correct environment
 @everywhere using Plasmo
-@everywhere using PipsSolver
-
-graph = OptiGraph()
-
-#Add nodes to a GraphModel
-@optinode(graph,n1)
-@optinode(graph,n2)
-
-@variable(n1,0 <= x <= 2)
-@variable(n1,0 <= y <= 3)
-@variable(n1, z >= 0)
-@constraint(n1,x+y+z >= 4)
-@objective(n1,Min,y)
-
-@variable(n2,x)
-@NLnodeconstraint(n2,ref,exp(x) >= 2)
-@variable(n2,z >= 0)
-@constraint(n2,z + x >= 4)
-@objective(n2,Min,x)
-
-@linkconstraint(graph,n1[:x] == n2[:x])
+@everywhere using PipsNLP
 
 #Setup MPI manager
 manager=MPIManager(np=2) # specify, number of mpi workers, launch cmd, etc.
 addprocs(manager)        # start mpi workers and add them as julia workers too.
 
+#create an optigraph with Plasmo.jl
+graph = OptiGraph()
 
-#Map julia workers to MPI ranks
+#Add optinodes
+graph = OptiGraph()
+
+n1 = @optinode(graph)
+n2 = @optinode(graph)
+
+@variable(n1, 0 <= x <= 2)
+@variable(n1, 0 <= y <= 3)
+@variable(n1, z >= 0)
+@constraint(n1, x+y+z >= 4)
+@objective(n1, Min, y)
+
+@variable(n2,x)
+@NLconstraint(n2,ref,exp(x) >= 2)
+@variable(n2,z >= 0)
+@constraint(n2,z + x >= 4)
+@objective(n2,Min,x)
+
+#link constraint between nodes
+@linkconstraint(graph,n1[:x] == n2[:x])
+
+#map julia workers to MPI ranks
 julia_workers = sort(collect(values(manager.mpi2j)))
-#Distribute the graph to workers. This creates the variable `pipsgraph` on each worker with an allocation of optinodes.
-remote_references = PipsSolver.distribute(graph,julia_workers,remote_name = :pipsgraph)
 
-# The remote optigraphs can be queried if they are fetched from the other workers.  
-r1 = fetch(remote_references[1])
-r2 = fetch(remote_references[2])
+#distribute the graph to workers. This creates the variable `pipsgraph` on each worker with an allocation of optinodes.
+remote_references = PipsNLP.distribute_optigraph(graph,julia_workers,remote_name = :pipsgraph)
 
-#Solve with PIPS-NLP
+#solve with PIPS-NLP and MPI
 @mpi_do manager begin
     using MPI
-    PipsSolver.pipsnlp_solve(pipsgraph)
+    PipsNLP.pipsnlp_solve(pipsgraph)
 end
 
-#Retrieve Solution
-rank_zero = manager.mpi2j[0] #julia process representing rank 0
-solution = fetch(@spawnat(rank_zero, pipsgraph))
+#fill the local solution with the result on worker 2 (worker 2 is the root MPI rank)
+PipsNLP.fill_solution!(graph, :pipsgraph, 2)
 ```
