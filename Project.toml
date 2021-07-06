@@ -21,7 +21,7 @@ JuMP = "0.19, 0.20, 0.21"
 MPI = "0.14"
 MPIClusterManagers = "0.2"
 MathOptInterface = "0.9"
-Plasmo = "0.3, 0.4"
+Plasmo = "0.4"
 julia = "1"
 
 [extras]
