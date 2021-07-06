@@ -2,12 +2,12 @@
 
 ## Overview
 PipsNLP.jl is a Julia interface to the [PIPS-NLP](https://github.com/Argonne-National-Laboratory/PIPS/tree/master/PIPS-NLP) nonlinear optimization solver.
-Running the solver requires a working PIPS-NLP installation following the [instructions](https://github.com/Argonne-National-Laboratory/PIPS).  
-The PipsNLP.jl package works with [Plasmo.jl](https://github.com/zavalab/Plasmo.jl) to model and solve optimization problems in parallel.
+Running the solver requires a working PIPS-NLP installation following the [instructions](https://github.com/Argonne-National-Laboratory/PIPS).   
 
-## Important Notes
-At some point, PIPS-NLP updated and broke support for linking constraints.  If you wish to model with linking constraints, try checking out the following commit hash:
-`62f664237447c7ce05a62552952c86003d90e68f`
+At some point, PIPS-NLP updated which broke support for linking constraints.  If you wish to model with linking constraints, try checking out the following commit hash from the
+PIPS-NLP repo and compiling: `62f664237447c7ce05a62552952c86003d90e68f`
+
+Also note that you will need to compile PIPS-NLP with the same version of MPI used for your Julia environment.
 
 ## Julia Interface Installation
 PipsNLP.jl can be installed using the following Julia Pkg command.
@@ -21,15 +21,18 @@ or simply:
 pkg> add https://github.com/zavalab/PipsNLP.jl.git
 ```
 
-
 ## Useage
+The PipsNLP.jl package works with [Plasmo.jl](https://github.com/zavalab/Plasmo.jl) to model and solve optimization problems in parallel.
+
 Currently, PipsNLP.jl supports three main modes for modeling.  These are:
 - 1) Model in parallel and execute with mpirun
 - 2) Model in parallel using Julia's mpimanager where mpiranks correspond to Julia workers
 - 3) Model in serial and then distribute to julia workers and solve with MPI.  
 
-The examples folder has examples for each of these modeling approaches.  While the first approach is probably the most familiar, the second two approaches make it possible to interact with
-the PipsNLP model and perform multiple solves in a Julia session.  The following snippet shows how one might model using the distribute functionality.
+The [examples](https://github.com/zavalab/PipsNLP.jl/tree/master/examples) folder has examples for each of these modeling approaches.  While the first approach is probably the most familiar
+to MPI users, the second two approaches make it possible to interact with the PipsNLP model (e.g. to perform multiple solves in a Julia session).  
+
+The following snippet shows how one might model using this third approach to distribute an optigraph and execute PIPS-NLP.
 
 ```julia
 using MPIClusterManagers # to import MPIManager
