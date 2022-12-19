@@ -8,6 +8,7 @@ using DataStructures
 
 export pipsnlp_solve, distribute_optigraph, retrieve_solution
 
+include("pips_utils.jl")
 include("pips_nlp_data.jl")
 include("distribute.jl")
 include("pipsnlp_interface.jl")
